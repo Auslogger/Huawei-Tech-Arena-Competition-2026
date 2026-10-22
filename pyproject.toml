@@ -1,0 +1,23 @@
+[project]
+name = "huawei-tech-arena-2026"
+version = "0.1.0"
+description = "Huawei Tech Arena 2026 phase-1 click prediction"
+requires-python = ">=3.12,<3.14"
+dependencies = [
+    "catboost>=1.2.10",
+    "lightgbm>=4.7.0",
+    "numpy>=2.5.4",
+    "polars>=2.1.0",
+    "pyarrow>=26.0.0",
+    "pypdf>=6.21.4",
+    "scikit-learn>=1.9.1",
+    "scipy>=1.18.1",
+    "torch>=2.15.0",
+]
+
+[build-system]
+requires = ["uv_build>=0.13.1,<0.14.0"]
+build-backend = "uv_build"
+
+[tool.uv.build-backend]
+module-name = "hta"
