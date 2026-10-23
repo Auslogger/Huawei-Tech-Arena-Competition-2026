@@ -149,3 +149,71 @@ def fit_nce(pu, pi, w=None, k=64, epochs=20, batch=8192, neg=16, lr=.005, wd=.01
     if sphere:
         U.data, V.data = F.normalize(U.data, dim=-1) * sphere ** .5, F.normalize(V.data, dim=-1) * sphere ** .5
     return U.detach().cpu().numpy(), V.detach().cpu().numpy(), b.detach().cpu().numpy(), prop
+
+
+@torch.no_grad()
+def local_infer(U0, V, b, prop, hist, steps=15, lr=.5, l2=.005, seed=104842, n_refs=256, kappa=0., anchor=False,
+                own=None, own_w=.5):
+    """Own-history density update from prior U0 (n,k); hist (n,L) int items with -1 padding. Duplicates are kept.
+
+    kappa scales the data term by n/(n+kappa), so short histories move less; anchor pulls towards U0 instead of 0.
+    own (n,R) adds event-specific noise references, e.g. the slate, for states trained against the user's offers.
+    """
+    rng = np.random.default_rng(seed)
+    refs = rng.choice(NI, n_refs, p=prop)
+    Vt, bt = torch.as_tensor(V), torch.as_tensor(b)
+    Vr, br = Vt[refs], bt[refs]
+    h = torch.as_tensor(hist.astype(np.int64))
+    m = (h >= 0).float()
+    cnt = m.sum(1, keepdim=True)
+    h = h.clamp(min=0)
+    Hv, Hb = Vt[h], bt[h]  # (n,L,k), (n,L)
+    u0 = torch.as_tensor(U0)
+    u = u0.clone()
+    has = (cnt[:, 0] > 0)
+    if own is not None:
+        o = torch.as_tensor(own.astype(np.int64))
+        Vo, bo = Vt[o], bt[o]
+    conf = cnt / (cnt + kappa) if kappa > 0 else 1.
+    for _ in range(steps):
+        sp = (Hv * u[:, None, :]).sum(2) + Hb
+        gp = -((torch.sigmoid(-sp) * m)[..., None] * Hv).sum(1) / cnt.clamp(min=1)
+        sn = u @ Vr.T + br
+        gn = torch.sigmoid(sn) @ Vr / n_refs
+        if own is not None:
+            so = (Vo * u[:, None, :]).sum(2) + bo
+            gn = (1 - own_w) * gn + own_w * (torch.sigmoid(so)[..., None] * Vo).mean(1)
+        g = conf * (.5 * gp + .5 * gn) + 2 * l2 * (u - u0 if anchor else u)
+        u[has] -= lr * g[has]
+    return u.numpy()
+
+
+def procrustes(V, Vref):
+    """Orthogonal map R with V @ R close to Vref on row-normalised item vectors."""
+    A = V / np.maximum(np.linalg.norm(V, axis=1, keepdims=True), 1e-9)
+    Bn = Vref / np.maximum(np.linalg.norm(Vref, axis=1, keepdims=True), 1e-9)
+    Ua, _, Vb = np.linalg.svd(A.T @ Bn, full_matrices=False)
+    return Ua @ Vb
+
+
+@torch.no_grad()
+def local_pairs(X0, F, off, row, col, w, F_noise, off_noise, steps=15, lr=.5, l2=.02):
+    """Entity-mean update of every row of X0 from its positive partners, the item-side twin of local_infer.
+
+    The data term is a per-entity mean, so each entity moves the same distance whatever its count. off is per row.
+    """
+    X = torch.as_tensor(X0).clone()
+    F, off, F_noise, off_noise = [torch.as_tensor(a) for a in (F, off, F_noise, off_noise)]
+    row, col = torch.as_tensor(row.astype(np.int64)), torch.as_tensor(col.astype(np.int64))
+    w = torch.as_tensor(w, dtype=torch.float32)
+    cnt = torch.zeros(len(X)).index_add_(0, row, w)
+    has = cnt > 0
+    Fc = F[col]
+    for _ in range(steps):
+        s = (X[row] * Fc).sum(1) + off[row]
+        gp = torch.zeros_like(X).index_add_(0, row, -(w * torch.sigmoid(-s))[:, None] * Fc) / cnt.clamp(min=1)[:, None]
+        sn = X @ F_noise.T + off[:, None] + off_noise
+        gn = torch.sigmoid(sn) @ F_noise / len(F_noise)
+        g = .5 * gp + .5 * gn + 2 * l2 * X
+        X[has] -= lr * g[has]
+    return X.numpy()
