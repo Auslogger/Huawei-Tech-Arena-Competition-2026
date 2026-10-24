@@ -85,3 +85,58 @@ def score(m, U, V, cand, X=None):
     Va = Vt[torch.as_tensor(cand.astype(np.int64))]
     z = m(Ua, Va, None if X is None else torch.as_tensor(X, dtype=torch.float64))
     return marginal(z).numpy()
+
+
+class Group:
+    """Events sharing one item table. U (n,a), V (items,b), cand (n,10), y (n,10)|None, X (n,10,c), w (n,)|None."""
+
+    def __init__(self, U, V, cand, y=None, X=None, w=None):
+        self.U = augment(torch.as_tensor(np.asarray(U, np.float32)))
+        self.V = augment(torch.as_tensor(np.asarray(V, np.float32)))
+        self.c = torch.as_tensor(cand.astype(np.int64))
+        self.y = None if y is None else torch.as_tensor(y.astype(np.float32))
+        self.X = None if X is None else torch.as_tensor(np.asarray(X, np.float32))
+        self.w = None if w is None else torch.as_tensor(np.asarray(w, np.float32))
+        self.n = len(self.c)
+
+
+def _chunk(g, i, j):
+    return g.U[i:j].double(), g.V[g.c[i:j]].double(), None if g.X is None else g.X[i:j].double()
+
+
+def fit_groups(groups, lam=.1, iters=300, chunk=40000, verbose=False, init=None, blocks=None):
+    """Same objective as `fit`, over several item tables, with one autograd graph per chunk to bound memory."""
+    a, b = groups[0].U.shape[1] - 1, groups[0].V.shape[1] - 1
+    c = 0 if groups[0].X is None else groups[0].X.shape[-1]
+    m = Bilinear(a, b, c, blocks=blocks).double() if init is None else init
+    total = sum(float(g.n if g.w is None else g.w.sum()) for g in groups) * 10
+    opt = torch.optim.LBFGS(m.parameters(), lr=1, max_iter=iters, max_eval=iters * 2, history_size=30,
+                            line_search_fn="strong_wolfe", tolerance_grad=1e-7, tolerance_change=1e-12)
+    t = time.time()
+
+    def closure():
+        opt.zero_grad()
+        val = 0.
+        for g in groups:
+            for i in range(0, g.n, chunk):
+                j = min(i + chunk, g.n)
+                z = m(*_chunk(g, i, j))
+                y = g.y[i:j].double()
+                ll = torch.logaddexp(torch.zeros_like(z[:, 0]), torch.logsumexp(z, 1)) - (z * y).sum(1)
+                ll = (ll if g.w is None else ll * g.w[i:j].double()).sum() / total
+                ll.backward()
+                val += float(ll.detach())
+        reg = .5 * lam * ((m.W ** 2).sum() + (0 if m.beta is None else (m.beta ** 2).sum()))
+        reg.backward()
+        return val + float(reg.detach())
+
+    opt.step(closure)
+    if verbose:
+        st = opt.state_dict()["state"][0]
+        print(f"fit iters {st['n_iter']} evals {st['func_evals']} {time.time() - t:.0f}s", flush=True)
+    return m
+
+
+@torch.no_grad()
+def score_group(m, g, chunk=40000):
+    return np.concatenate([marginal(m(*_chunk(g, i, min(i + chunk, g.n)))).numpy() for i in range(0, g.n, chunk)])
