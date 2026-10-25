@@ -103,3 +103,69 @@ CFG = dict(l2=.02, wd=.3, epochs=80)
 
 
 LOCAL_KEYS = ("il", "il_lr", "il_rounds", "il_users")
+
+
+def item_local(d, day, U, V, b, prop, cfg):
+    """Entity-mean refit of item vectors against their clickers; optional alternation with users' full positives."""
+    pu, pi, _, w = states.positives(d, day_ts(day))
+    l2, steps, lr = cfg.get("l2", DEFAULT["l2"]), cfg["il"], cfg.get("il_lr", .5)
+    n_u = np.bincount(pu, weights=w, minlength=NU)
+    rng = np.random.default_rng(104842)
+    refs_u = rng.choice(NU, 256, p=n_u / n_u.sum())
+    refs_i = rng.choice(NI, 256, p=prop)
+    zero_u = np.zeros(NU, np.float32)
+    zero_n = np.zeros(256, np.float32)
+    for _ in range(cfg.get("il_rounds", 1)):
+        if cfg.get("il_users"):
+            U = states.local_pairs(U, V, zero_u, pu, pi, w, V[refs_i], b[refs_i], steps=steps, lr=lr, l2=l2)
+        V = states.local_pairs(V, U, b, pi, pu, w, U[refs_u], zero_n, steps=steps, lr=lr, l2=l2)
+    return U, V
+
+
+class Producer:
+    """States of one seed at successive daily cutoffs, rotated into the first cutoff's coordinates."""
+
+    def __init__(self, d, first, last, seed=113, **cfg):
+        self.d, self.seed, self.cfg, self.st, self.first = d, seed, cfg, {}, first
+        ref = None
+        fit_cfg = {k: v for k, v in cfg.items() if k not in ("local_steps", "unit_u", "unit_v", "slate_refs",
+                                                             "slate_as_hist", "own_w", "fism_local")}
+        for day in range(first, last + 1):
+            U, V, b, prop = state(d, day_ts(day), seed, **{k: v for k, v in fit_cfg.items() if k not in LOCAL_KEYS})
+            if cfg.get("il"):
+                U, V = item_local(d, day, U, V, b, prop, cfg)
+            if ref is None:
+                ref = V
+            else:
+                R = states.procrustes(V, ref)
+                U, V = U @ R, V @ R
+            self.st[day] = (U, V, b, prop)
+
+    def inputs(self, day, ev):
+        """Query-local user vectors, the item table and density scalars of events scored by the `day` producer."""
+        U, V, b, prop = self.st[day]
+        if self.cfg.get("fism"):
+            from . import fism
+            c = self.cfg
+            u = fism.pooled_user(U, self.d.hist_item[ev], c.get("alpha", 1.), c.get("scale", 3.))
+            if c.get("fism_local"):  # optional refinement from the pooled start
+                u = states.local_infer(u, V, b, prop, self.d.hist_item[ev], steps=c["fism_local"],
+                                       l2={**DEFAULT, **c}["l2"])
+            return u, V, density_x(u, V, b, self.d.cand[ev])
+        steps = self.cfg.get("local_steps", 15)
+        own = self.d.cand[ev] if self.cfg.get("slate_refs") else None
+        hist = self.d.cand[ev] if self.cfg.get("slate_as_hist") else self.d.hist_item[ev]
+        u = states.local_infer(U[self.d.user[ev]], V, b, prop, hist, steps=steps,
+                               l2={**DEFAULT, **self.cfg}["l2"], own=own,
+                               own_w=self.cfg.get("own_w", 1 - self.cfg.get("mix", 0.)))
+        if self.cfg.get("unit_u"):
+            u = u / np.maximum(np.linalg.norm(u, axis=1, keepdims=True), 1e-6) * self.cfg["unit_u"]
+        if self.cfg.get("unit_v"):
+            V = V / np.maximum(np.linalg.norm(V, axis=1, keepdims=True), 1e-6) * self.cfg["unit_v"]
+        return u, V, density_x(u, V, b, self.d.cand[ev])
+
+
+def days_of(d, day):
+    """Labelled event indices on the given January day."""
+    t = d.ts[:d.n_train]
+    return np.where((t >= day_ts(day)) & (t < day_ts(day + 1)))[0]
