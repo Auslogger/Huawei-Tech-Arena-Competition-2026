@@ -1,10 +1,12 @@
 """Cached state producers and per-event inputs. A state is fully keyed by its cutoff, seed and config."""
+import json
+import sys
 import time
 
 import numpy as np
 
 from . import states
-from .lib import CACHE, DAY, NI, NU, day_ts
+from .lib import CACHE, D, DAY, NI, NU, day_ts
 
 DEFAULT = dict(k=64, l2=.02, wd=.3, epochs=80)
 
@@ -169,3 +171,16 @@ def days_of(d, day):
     """Labelled event indices on the given January day."""
     t = d.ts[:d.n_train]
     return np.where((t >= day_ts(day)) & (t < day_ts(day + 1)))[0]
+
+
+def main():
+    """Fit states ahead of a run, so GPU and CPU stages can be scheduled apart: python -m hta.pipe CFG_JSON T,T seed,seed."""
+    cfg, days, seeds = json.loads(sys.argv[1]), sys.argv[2].split(","), sys.argv[3].split(",")
+    d = D()
+    for seed in seeds:
+        for day in days:
+            state(d, day_ts(int(day)), int(seed), **cfg)
+
+
+if __name__ == "__main__":
+    main()

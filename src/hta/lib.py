@@ -1,4 +1,5 @@
 """Shared data access, splits, metrics and fast linear algebra."""
+import os
 from pathlib import Path
 
 import numpy as np
@@ -11,6 +12,7 @@ RUNS = ROOT / "runs"
 T0 = 1737331200  # 2025-01-20 00:00 UTC
 DAY = 86400
 NU, NI = 54456, 50000
+THREADS = int(os.environ.get("HTA_THREADS", 8))  # 8 beats 10 here: the efficiency cores stall the performance threads
 
 
 def day_ts(jan):

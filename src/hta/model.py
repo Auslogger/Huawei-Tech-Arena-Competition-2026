@@ -10,10 +10,10 @@ import lightgbm as lgb
 import numpy as np
 
 from . import features, head, pipe
-from .lib import NI, RUNS, day_ts
+from .lib import NI, RUNS, THREADS, day_ts, first_events
 
 LGB = dict(objective="binary", learning_rate=.03, num_leaves=31, min_data_in_leaf=200, feature_fraction=.5,
-           bagging_fraction=.8, bagging_freq=1, lambda_l2=30., max_bin=63, verbose=-1, num_threads=8)
+           bagging_fraction=.8, bagging_freq=1, lambda_l2=30., max_bin=63, verbose=-1, num_threads=THREADS)
 
 
 def logit_of(lp):

@@ -4,7 +4,9 @@ import time
 import numpy as np
 import torch
 
-torch.set_num_threads(8)
+from .lib import THREADS
+
+torch.set_num_threads(THREADS)
 
 
 def choice_nll(z, y):
