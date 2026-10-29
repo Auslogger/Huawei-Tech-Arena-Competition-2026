@@ -36,11 +36,10 @@ def state(d, T, seed=113, **cfg):
         np.savez(p, U=U, V=V, b=b, prop=prop)
         print(f"  newton {p.stem} {time.time() - t:.0f}s", flush=True)
         return U, V, b, prop
-    if cfg.get("slate"):  # item table from shown slates, warm-started from the frozen NCE table of this cutoff
+    if cfg.get("slate"):  # each click trains one likelihood; see choice.py
         from . import choice
         c = {**DEFAULT, **cfg}
-        U, V, b, prop = choice.fit(d, T, *state(d, T, seed, **CFG)[1:3], seed=seed,
-                                   **{k: c[k] for k in ("l2", "wd", "epochs", "alpha", "scale", "lr", "batch") if k in c})
+        U, V, b, prop = choice.fit(d, T, seed=seed, **{k: v for k, v in c.items() if k not in ("slate", "fism")})
         p.parent.mkdir(exist_ok=True)
         np.savez(p, U=U, V=V, b=b, prop=prop)
         print(f"  fit {p.stem} {time.time() - t:.0f}s", flush=True)
@@ -124,6 +123,19 @@ def item_local(d, day, U, V, b, prop, cfg):
     return U, V
 
 
+def rejected_refs(d, day, ev, prop, R=64, seed=104842):
+    """R noise references per event from its user's offers rejected before the day; users with none use the proposal."""
+    e = np.where(d.ts[:d.n_train] < day_ts(day))[0]
+    r, c = np.where(d.y[e] == 0)
+    off, lst = states.exposure_index(d.user[e[r]], d.cand[e[r], c])
+    u, rng = d.user[ev], np.random.default_rng(seed)
+    n = off[u + 1] - off[u]
+    pick = (rng.random((len(ev), R)) * n[:, None]).astype(np.int64)
+    out = lst[np.minimum(off[u][:, None] + pick, len(lst) - 1)]
+    out[n == 0] = rng.choice(NI, ((n == 0).sum(), R), p=prop)
+    return out
+
+
 class Producer:
     """States of one seed at successive daily cutoffs, rotated into the first cutoff's coordinates."""
 
@@ -156,10 +168,12 @@ class Producer:
             return u, V, density_x(u, V, b, self.d.cand[ev])
         steps = self.cfg.get("local_steps", 15)
         own = self.d.cand[ev] if self.cfg.get("slate_refs") else None
+        own_w = self.cfg.get("own_w", 1 - self.cfg.get("mix", 0.))
+        if self.cfg.get("rej_w"):
+            own, own_w = rejected_refs(self.d, day, ev, prop), self.cfg["rej_w"]
         hist = self.d.cand[ev] if self.cfg.get("slate_as_hist") else self.d.hist_item[ev]
         u = states.local_infer(U[self.d.user[ev]], V, b, prop, hist, steps=steps,
-                               l2={**DEFAULT, **self.cfg}["l2"], own=own,
-                               own_w=self.cfg.get("own_w", 1 - self.cfg.get("mix", 0.)))
+                               l2={**DEFAULT, **self.cfg}["l2"], own=own, own_w=own_w)
         if self.cfg.get("unit_u"):
             u = u / np.maximum(np.linalg.norm(u, axis=1, keepdims=True), 1e-6) * self.cfg["unit_u"]
         if self.cfg.get("unit_v"):
