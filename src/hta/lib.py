@@ -72,6 +72,16 @@ def check_query(d, ev, cut):
     assert d.hist_ts[ev].max() < day_ts(cut), f"cut {cut}: query history reaches the cutoff"
 
 
+def leak_gap(name, y_fit, s_fit, y_next, s_next, tol=.03):
+    """Standing check for supervised stages: rows they fit on must not score far above rows they have not seen.
+
+    A fitted table holding its training events' labels shows AUC .92 on them against .77 next day (attempts.md).
+    """
+    a, b = auc(y_fit, s_fit), auc(y_next, s_next)
+    print(f"  leak check {name}: fit rows {a:.4f}, unseen rows {b:.4f}", flush=True)
+    assert a - b < tol, f"{name}: {a:.4f} on its fit rows against {b:.4f} unseen, labels are in its inputs"
+
+
 def rsvd(B, k, oversample=20, power=4, seed=0):
     """Randomized SVD of a sparse matrix; returns U, s, Vt sorted by s desc."""
     rng = np.random.default_rng(seed)

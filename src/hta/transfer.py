@@ -5,7 +5,7 @@ import sys
 import numpy as np
 
 from . import model
-from .lib import D, RUNS, auc, check_query, day_ts, first_events
+from .lib import D, RUNS, auc, check_query, day_ts, first_events, leak_gap
 
 
 def main():
@@ -21,8 +21,10 @@ def main():
         day1 = delay < 24
         s, h = 0., 0.
         for i, seed in enumerate(seeds):
-            p, lq, _ = model.run_seed(d, cut, q, seed, **opts)
+            o = {}
+            p, lq, _ = model.run_seed(d, cut, q, seed, train_out=o, **opts)
             np.save(RUNS / f"{name}_c{cut}_s{seed}.npy", p.astype(np.float32))
+            leak_gap("stack", d.y[o["ev"]], o["logit"], d.y[q], p, tol=.05)
             s, h = s + p, h + lq
             r = {"cut": cut, "n_seeds": i + 1, "day1_events": int(day1.sum()),
                  "day1": round(auc(d.y[q][day1], s[day1]), 6), "all_delay": round(auc(d.y[q], s), 6),
