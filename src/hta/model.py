@@ -41,7 +41,8 @@ def user_day_weight(d, ev, alpha):
 
 
 def run_seed(d, cut, test_ev, seed, cfg=pipe.CFG, lam=.1, trees=300, extra=None, log=print, alpha=0., tree_alpha=None,
-             views=None, blocks=False, params=None, train_out=None, first_day=21, day_std=0, oof=0, support=0):
+             views=None, blocks=False, params=None, train_out=None, first_day=21, day_std=0, oof=0, support=0,
+             extra_head=None, pop=0, cats=0, head_u=0, lam_b=None, prx=0, te=0, slate=None, slate_base=0):
     """Fit on labelled days [21, cut) and return log-odds (n_test,10) for test_ev. alpha reweights heavy users.
 
     views: list of state configs, concatenated per day. blocks=True drops cross-view head interactions.
@@ -49,6 +50,9 @@ def run_seed(d, cut, test_ev, seed, cfg=pipe.CFG, lam=.1, trees=300, extra=None,
     oof: the tree learns from head logits of a head fit on the other days. support: adds features.support tree inputs.
     """
     t0 = time.time()
+    if cats:
+        from . import groups
+        extra_head = groups.Cats(d, cut, rich=cats)
     views = [cfg] if views is None else views
     Ps = [pipe.Producer(d, first_day, cut, seed=seed, **c) for c in views]
 

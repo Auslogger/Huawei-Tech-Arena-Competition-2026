@@ -10,16 +10,19 @@ import torch.nn.functional as F
 from .lib import NI, NU, norm_incidence, rsvd
 
 
-def positives(d, T, start=0):
+def positives(d, T, start=0, query=None):
     """Deduplicated positive (user,item,time,count) known strictly before T, from snapshots and labelled clicks.
 
     A click repeated by later snapshots counts once: count = max(max snapshot multiplicity, labelled clicks at key).
+    query: events at or after T whose supplied histories also count. A query history holds only clicks before the cutoff, and
+    the event's own outcome is never read, so this adds label-free evidence of exactly what those rows would show at scoring.
     """
     ev = np.where((d.ts[:d.n_train] < T) & (d.ts[:d.n_train] >= start))[0]
-    m = d.hist_item[ev] >= 0
+    se = ev if query is None else np.r_[ev, query]
+    m = d.hist_item[se] >= 0
     n = m.sum(1)
-    snap = (pl.DataFrame({"e": np.repeat(ev, n), "u": np.repeat(d.user[ev], n), "i": d.hist_item[ev][m],
-                          "t": d.hist_ts[ev][m]})
+    snap = (pl.DataFrame({"e": np.repeat(se, n), "u": np.repeat(d.user[se], n), "i": d.hist_item[se][m],
+                          "t": d.hist_ts[se][m]})
             .group_by(["e", "u", "i", "t"]).len().group_by(["u", "i", "t"]).agg(pl.col("len").max().alias("c"))
             .with_columns(pl.col("c").cast(pl.Int32)))
     r, c = np.where(d.y[ev] == 1)
@@ -29,6 +32,31 @@ def positives(d, T, start=0):
     j = j.with_columns(pl.max_horizontal("c", "l").alias("w"))
     assert j["t"].max() < T, "positive at or after the cutoff"
     return j["u"].to_numpy(), j["i"].to_numpy(), j["t"].to_numpy(), j["w"].to_numpy().astype(np.float32)
+
+
+def known_history(d, ev, T, L=64):
+    """(n,L) -1 padded: each event's supplied history preceded by that user's older clicks known before T.
+
+    A history is the user's latest clicks, so anything older than its first entry is outside the window. Those clicks come
+    from `positives(d, T)`, which holds no event at or after T, so this adds no label of the event or of its day.
+    """
+    pu, pi, pt, w = positives(d, T)
+    o = np.lexsort((pt, pu))
+    pu, pi, pt = pu[o], pi[o], pt[o].astype(np.int64)
+    comp = pu.astype(np.int64) * (1 << 32) + pt
+    h, ht = d.hist_item[ev], d.hist_ts[ev].astype(np.int64)
+    n = (h >= 0).sum(1)
+    u = d.user[ev].astype(np.int64)
+    start = np.searchsorted(comp, u * (1 << 32), "left")
+    first = np.where(n > 0, ht[:, 0], d.ts[ev].astype(np.int64))
+    stop = np.searchsorted(comp, u * (1 << 32) + first, "left")
+    room = L - h.shape[1]
+    old = np.full((len(ev), room), -1, np.int32)
+    take = np.minimum(stop - start, room) * (n == h.shape[1])  # a short history already holds all of that user's clicks
+    r = np.repeat(np.arange(len(ev)), take)
+    c = np.concatenate([np.arange(t) for t in take]) if take.sum() else np.zeros(0, int)
+    old[r, c] = pi[np.repeat(stop - take, take) + c]
+    return np.concatenate([old, h], 1)
 
 
 def exposures(d, T, start=0):
@@ -46,7 +74,7 @@ def exposure_index(eu, ei, n=NU):
 
 def fit_nce(pu, pi, w=None, k=64, epochs=20, batch=8192, neg=16, lr=.005, wd=.01, l2=.005, seed=113, init="svd",
             device="cpu", power=.75, log=False, expo=None, mix=0., init_expo=None, beta=0., choice=None, gamma=0.,
-            noise_mass=None, iexpo=None, iota=0., sphere=0., drop=0.):
+            noise_mass=None, iexpo=None, iota=0., sphere=0., drop=0., swa=0, cat=None, cmix=0., ucat=None):
     """Positive/noise logistic factorization. Noise is proposal-based, never an observed negative.
 
     expo=(offsets, items) draws noise from the user's own offer list, so the logit targets preference rather than
@@ -101,6 +129,16 @@ def fit_nce(pu, pi, w=None, k=64, epochs=20, batch=8192, neg=16, lr=.005, wd=.01
     if expo is not None:
         off = torch.as_tensor(expo[0].astype(np.int64), device=dev)
         lst = torch.as_tensor(expo[1].astype(np.int64), device=dev)
+    if cat is not None:
+        th = torch.as_tensor(cat[0], device=dev)
+        lab_t = torch.as_tensor(cat[1].astype(np.int64))
+        ck = th.shape[1]
+        cpool = [torch.multinomial(torch.as_tensor(cat[2] * (cat[1] == c), dtype=torch.float32), 4_000_000, True, generator=g)
+                 for c in range(ck)]
+        cpool = torch.stack(cpool).to(dev)  # (K, pool)
+        if ucat is not None:
+            upool = torch.stack([torch.multinomial(torch.as_tensor(ucat[:, c], dtype=torch.float32) + 1e-6, 4_000_000, True, generator=g)
+                                 for c in range(ck)]).to(dev)
     t0, step = time.time(), 0
     for ep in range(epochs):
         order = torch.randperm(len(pu), generator=g).to(dev)
@@ -115,6 +153,10 @@ def fit_nce(pu, pi, w=None, k=64, epochs=20, batch=8192, neg=16, lr=.005, wd=.01
                 own = lst[(lo + pick).clamp(max=len(lst) - 1)]
                 use = (n > 0) & (torch.rand(len(idx), neg, generator=g).to(dev) >= mix)
                 nn = torch.where(use, own, nn)
+            if cat is not None:
+                cc = torch.multinomial(th[uu], neg, replacement=True)
+                own = cpool[cc, torch.randint(cpool.shape[1], cc.shape, device=dev)]
+                nn = torch.where(torch.rand(len(idx), neg, device=dev) >= cmix, own, nn)
             ue, ve, ne = U[uu], V[ii], V[nn]
             if sphere:  # unit vectors with shared temperature: direction only, and tau alone bounds capacity
                 ue, ve, ne = [F.normalize(x, dim=-1) * sphere ** .5 for x in (ue, ve, ne)]
@@ -123,6 +165,10 @@ def fit_nce(pu, pi, w=None, k=64, epochs=20, batch=8192, neg=16, lr=.005, wd=.01
             pos = (ue * ve).sum(1) + b[ii]
             nsc = (ne * ue[:, None, :]).sum(2) + b[nn]
             noise = F.softplus(nsc).mean(1)
+            if ucat is not None:  # noise users: those the exposure model would show this item's category to
+                nu = upool[lab_t[ii.cpu()].to(dev)[:, None], torch.randint(upool.shape[1], (len(idx), neg), device=dev)]
+                sn2 = (U[nu] * ve[:, None, :]).sum(2) + b[ii][:, None]
+                noise = (1 - iota) * noise + iota * F.softplus(sn2).mean(1)
             if iexpo is not None:  # noise users: others who were offered this same item
                 lo, n = ioff[ii][:, None], (ioff[ii + 1] - ioff[ii])[:, None]
                 pick = (torch.rand(len(idx), neg, generator=g).to(dev) * n).long()

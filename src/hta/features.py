@@ -87,6 +87,21 @@ def scalars(d, ev, cut_day=None):
     return x.astype(np.float32)
 
 
+def prior_sum(keys, t, vals):
+    """For rows grouped by `keys`, the sum of each column of float `vals` over strictly earlier timestamps in the group."""
+    order = np.lexsort((t, keys))
+    k, ts = keys[order], t[order]
+    n = len(k)
+    new_group = np.r_[True, k[1:] != k[:-1]]
+    new_tie = new_group | np.r_[True, ts[1:] != ts[:-1]]
+    gs = np.maximum.accumulate(np.where(new_group, np.arange(n), 0))
+    ti = np.maximum.accumulate(np.where(new_tie, np.arange(n), 0))
+    cv = np.r_[np.zeros((1, vals.shape[1])), np.cumsum(vals[order], 0)]
+    out = np.zeros_like(vals)
+    out[order] = cv[ti] - cv[gs]
+    return out
+
+
 def support(d, day, ev, D):
     """Known positive mass of the candidate and of the user at the day's cutoff, and the density rank in the slate."""
     pu, pi, _, w = states.positives(d, day_ts(day))

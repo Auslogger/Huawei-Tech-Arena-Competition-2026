@@ -106,8 +106,7 @@ def _chunk(g, i, j):
     return g.U[i:j].double(), g.V[g.c[i:j]].double(), None if g.X is None else g.X[i:j].double()
 
 
-def fit_groups(groups, lam=.1, iters=300, chunk=40000, verbose=False, init=None, blocks=None):
-    """Same objective as `fit`, over several item tables, with one autograd graph per chunk to bound memory."""
+def fit_groups(groups, lam=.1, iters=300, chunk=40000, verbose=False, init=None, blocks=None, lam_b=None):
     a, b = groups[0].U.shape[1] - 1, groups[0].V.shape[1] - 1
     c = 0 if groups[0].X is None else groups[0].X.shape[-1]
     m = Bilinear(a, b, c, blocks=blocks).double() if init is None else init

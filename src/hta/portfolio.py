@@ -13,6 +13,7 @@ MEMBERS = {
     "A": A,
     "P": {**A, "power": 1., "beta": 3.},
     "B": {**A, "iota": .5, "own_noise": 1, "mix": .5, "slate_refs": 1},
+    "E": {**A, "cat_noise": 1, "cat_power": 1.},  # noise from the exposure model; see groups.py
 }
 PORTFOLIOS = {  # name: (weights, model.run_seed options)
     "C2": ({"P": .4, "A": .35, "B": .25}, {}),

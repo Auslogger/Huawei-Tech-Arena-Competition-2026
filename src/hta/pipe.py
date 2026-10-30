@@ -63,7 +63,7 @@ def state(d, T, seed=113, **cfg):
         w = w * np.random.default_rng(seed * 1009 + T % 100003).exponential(1., len(w)).astype(np.float32)
     if c.get("own_noise"):
         c["expo"] = states.exposure_index(*states.exposures(d, T))
-    if c.get("iota"):
+    if c.get("iota") and "ucat" not in c:
         eu, ei = states.exposures(d, T)
         c["iexpo"] = states.exposure_index(ei, eu, NI)
     if c.get("beta"):
@@ -171,6 +171,10 @@ class Producer:
         own_w = self.cfg.get("own_w", 1 - self.cfg.get("mix", 0.))
         if self.cfg.get("rej_w"):
             own, own_w = rejected_refs(self.d, day, ev, prop), self.cfg["rej_w"]
+        if self.cfg.get("cat_refs"):
+            from . import groups
+            kw = {k[4:]: self.cfg[k] for k in ("cat_power", "cat_tilt") if k in self.cfg}
+            own, own_w = groups.refs(self.d, day, ev, **kw), self.cfg["cat_refs"]
         hist = self.d.cand[ev] if self.cfg.get("slate_as_hist") else self.d.hist_item[ev]
         u = states.local_infer(U[self.d.user[ev]], V, b, prop, hist, steps=steps,
                                l2={**DEFAULT, **self.cfg}["l2"], own=own, own_w=own_w)
