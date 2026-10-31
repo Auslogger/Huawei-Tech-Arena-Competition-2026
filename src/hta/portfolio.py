@@ -19,7 +19,9 @@ MEMBERS = {
 # is about sixteen times harder, so it is rescaled.
 MEMBERS["B8"] = {**MEMBERS["B"], "proj": 8, "lam": .00625}
 MEMBERS["E8"] = {**MEMBERS["E"], "proj": 8, "lam": .00625}
+MEMBERS["K16"] = {**MEMBERS["E"], "k": 16, "lam": .1 * (16 / 64) ** 2}  # the same model fitted directly at rank 16
 MEMBERS["G"] = {**A, "batch": 32768, "epochs": 160, "graph": 1, "layers": 2, "wd": .6}  # smoothed over the positive graph
+MEMBERS["E8s"] = {**MEMBERS["E8"], "swa": 20}  # mean of the last 20 epochs
 PORTFOLIOS = {  # name: (weights, model.run_seed options)
     "C2": ({"P": .4, "A": .35, "B": .25}, {}),
     "C3": ({"P": 1 / 3, "A": 1 / 3, "B": 1 / 3}, dict(day_std=2, oof=1, support=1)),

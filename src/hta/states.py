@@ -80,6 +80,10 @@ def fit_nce(pu, pi, w=None, k=64, epochs=20, batch=8192, neg=16, lr=.005, wd=.01
     expo=(offsets, items) draws noise from the user's own offer list, so the logit targets preference rather than
     exposure x preference; users without offers, and a `mix` share of noise, fall back to the global proposal.
     init_expo=(users, items) adds the offer graph with weight beta to the spectral start, for rare-item vectors.
+    swa=n returns the mean of the iterates at the end of the last n epochs.
+    cat=(theta, lab, item_mass): noise from the exposure model, a category from the user's mix, then an item within it by mass;
+    a cmix share keeps the global proposal. ucat (users,K) offer counts: an iota share of the noise term contrasts the positive
+    with users drawn by how much they are offered the item's category, the mirror of cat.
     choice=(user, cand, y) adds gamma * slate-choice NLL that updates V only: U is detached, so users cannot memorise.
     """
     torch.manual_seed(seed)
@@ -192,6 +196,11 @@ def fit_nce(pu, pi, w=None, k=64, epochs=20, batch=8192, neg=16, lr=.005, wd=.01
             step += 1
         if log:
             print(f"ep {ep} loss {tot / max(len(pu) // batch, 1):.4f} {time.time() - t0:.0f}s", flush=True)
+        if swa and ep >= epochs - swa:
+            avg = [p.detach().clone() for p in (U, V, b)] if ep == epochs - swa else \
+                [a + (p.detach() - a) / (ep - epochs + swa + 1) for a, p in zip(avg, (U, V, b))]
+    if swa:
+        U.data, V.data, b.data = avg
     if sphere:
         U.data, V.data = F.normalize(U.data, dim=-1) * sphere ** .5, F.normalize(V.data, dim=-1) * sphere ** .5
     return U.detach().cpu().numpy(), V.detach().cpu().numpy(), b.detach().cpu().numpy(), prop
