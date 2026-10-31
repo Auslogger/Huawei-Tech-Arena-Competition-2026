@@ -65,11 +65,13 @@ def run_seed(d, cut, test_ev, seed, cfg=pipe.CFG, lam=.1, trees=300, extra=None,
     days = list(range(first_day, cut))
     data = []
     for day in days:
-        ev = pipe.days_of(d, day)
-        assert d.ts[ev].min() >= day_ts(day), "training rows precede their producer"
+        ev = pipe.days_of(d, day) if not pop else first_events(d, day_ts(day), day_ts(day + 1 if pop == 1 else cut))
+        assert d.ts[ev].min() >= day_ts(day) and d.ts[ev].max() < day_ts(cut), "training rows outside their window"
         u, V, D = inputs(day, ev)
         X = pipe.repeat_x(d, ev)
-        S = features.scalars(d, ev)
+        if extra_head is not None:
+            X = np.concatenate([X, extra_head(day, ev, P)], -1)
+        S = features.scalars(d, ev, cut_day=day if pop else None)
         if support:
             S = np.concatenate([S, features.support(d, day, ev, D)], -1)
         if extra is not None:

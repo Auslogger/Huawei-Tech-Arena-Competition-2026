@@ -46,6 +46,13 @@ def state(d, T, seed=113, **cfg):
         return U, V, b, prop
     pu, pi, _, w = states.positives(d, T)
     c = {**DEFAULT, **cfg}
+    if c.pop("graph", 0):  # smoothed over the positive graph; see graph.py
+        from . import graph
+        U, V, b, prop = graph.fit(pu, pi, w, seed=seed, **c)
+        p.parent.mkdir(exist_ok=True)
+        np.savez(p, U=U, V=V, b=b, prop=prop)
+        print(f"  fit {p.stem} {time.time() - t:.0f}s", flush=True)
+        return U, V, b, prop
     if c.pop("fism", 0):
         from . import fism
         c = {k: c[k] for k in c if k in ("k", "l2", "wd", "epochs", "alpha", "scale", "L", "power")}
@@ -61,6 +68,16 @@ def state(d, T, seed=113, **cfg):
         c["noise_mass"] = np.bincount(states.exposures(d, T)[1], minlength=NI).astype(np.float64)
     if c.pop("bag", 0):  # Bayesian bootstrap: exponential weights average data noise, not just optimiser noise
         w = w * np.random.default_rng(seed * 1009 + T % 100003).exponential(1., len(w)).astype(np.float32)
+    if c.pop("cat_noise", 0):  # noise from the exposure model: a category from the user's mix, an item within it by offers
+        from . import groups
+        day = (T - day_ts(20)) // DAY + 20
+        c["cat"] = groups.noise_tables(d, day, power=c.pop("cat_power", .75), tilt=c.pop("cat_tilt", 1.))
+        if c.get("cat_iota"):
+            c["iota"] = c.pop("cat_iota")
+            eu, ei = states.exposures(d, day_ts(day))
+            ucat = np.zeros((NU, groups.K), np.float32)
+            np.add.at(ucat, (eu, c["cat"][1][ei]), 1)
+            c["ucat"] = ucat
     if c.get("own_noise"):
         c["expo"] = states.exposure_index(*states.exposures(d, T))
     if c.get("iota") and "ucat" not in c:
