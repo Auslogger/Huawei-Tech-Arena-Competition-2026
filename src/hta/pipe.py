@@ -141,18 +141,26 @@ class Producer:
 
     def __init__(self, d, first, last, seed=113, **cfg):
         self.d, self.seed, self.cfg, self.st, self.first = d, seed, cfg, {}, first
-        ref = None
-        fit_cfg = {k: v for k, v in cfg.items() if k not in ("local_steps", "unit_u", "unit_v", "slate_refs",
-                                                             "slate_as_hist", "own_w", "fism_local")}
+        self.q = {}
+        ref = qref = None
+        fit_cfg = {k: v for k, v in cfg.items() if k not in ("local_steps", "unit_u", "unit_v", "slate_refs", "cat_refs",
+                                                             "slate_as_hist", "own_w", "fism_local", "rej_w", "proj", "proj_late")}
         for day in range(first, last + 1):
             U, V, b, prop = state(d, day_ts(day), seed, **{k: v for k, v in fit_cfg.items() if k not in LOCAL_KEYS})
             if cfg.get("il"):
                 U, V = item_local(d, day, U, V, b, prop, cfg)
+            if cfg.get("proj"):  # keep the preference block: the exposure model carries what the other dimensions held
+                P = np.linalg.svd(V, full_matrices=False)[2][:cfg["proj"]].T
+                U, V = (U @ P).astype(np.float32), (V @ P).astype(np.float32)
             if ref is None:
                 ref = V
             else:
                 R = states.procrustes(V, ref)
                 U, V = U @ R, V @ R
+            if cfg.get("proj_late"):  # as proj, but after query inference in the full space; bases stay aligned across days
+                Q = np.linalg.svd(V, full_matrices=False)[2][:cfg["proj_late"]].T
+                qref = V @ Q if qref is None else qref
+                self.q[day] = Q @ states.procrustes(V @ Q, qref)
             self.st[day] = (U, V, b, prop)
 
     def inputs(self, day, ev):
@@ -182,6 +190,8 @@ class Producer:
             u = u / np.maximum(np.linalg.norm(u, axis=1, keepdims=True), 1e-6) * self.cfg["unit_u"]
         if self.cfg.get("unit_v"):
             V = V / np.maximum(np.linalg.norm(V, axis=1, keepdims=True), 1e-6) * self.cfg["unit_v"]
+        if self.q:
+            u, V = (u @ self.q[day]).astype(np.float32), (V @ self.q[day]).astype(np.float32)
         return u, V, density_x(u, V, b, self.d.cand[ev])
 
 

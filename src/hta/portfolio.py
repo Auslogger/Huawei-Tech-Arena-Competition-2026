@@ -15,9 +15,14 @@ MEMBERS = {
     "B": {**A, "iota": .5, "own_noise": 1, "mix": .5, "slate_refs": 1},
     "E": {**A, "cat_noise": 1, "cat_power": 1.},  # noise from the exposure model; see groups.py
 }
+# Tables whose noise removes exposure hold nothing useful beyond the preference block. In whitened coordinates the head's ridge
+# is about sixteen times harder, so it is rescaled.
+MEMBERS["B8"] = {**MEMBERS["B"], "proj": 8, "lam": .00625}
+MEMBERS["E8"] = {**MEMBERS["E"], "proj": 8, "lam": .00625}
 PORTFOLIOS = {  # name: (weights, model.run_seed options)
     "C2": ({"P": .4, "A": .35, "B": .25}, {}),
     "C3": ({"P": 1 / 3, "A": 1 / 3, "B": 1 / 3}, dict(day_std=2, oof=1, support=1)),
+    "C4": ({"P": 1 / 6, "A": 1 / 6, "B8": 1 / 3, "E8": 1 / 3}, dict(day_std=2, oof=1, support=1, cats=3)),  # three noise families
 }
 
 
