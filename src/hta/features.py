@@ -119,6 +119,23 @@ def prior_sum(keys, t, vals):
     return out
 
 
+def intercept(d, pany, tau2=0.5):
+    """User intercept from past events only: one Newton step of a random effect, (O - E) / (I + 1/tau2), on the logit of a click.
+
+    pany (n_train,) is the model's chance of any click for each labelled event, with NaN where it has no estimate. Those events
+    use the mean rate, so they still count as evidence. Returns (estimate, posterior sd) per event of the whole data, labelled
+    then evaluation. Evaluation rows contribute no evidence.
+    """
+    n = d.n_train
+    p = np.where(np.isnan(pany), 0.63, pany).astype(np.float64)
+    c = (d.y[:n] == 1).any(1).astype(np.float64)
+    vals = np.zeros((d.n, 3))
+    vals[:n, 0], vals[:n, 1], vals[:n, 2] = c, p, p * (1 - p)
+    s = prior_sum(d.user.astype(np.int64), d.ts.astype(np.int64), vals)
+    prec = s[:, 2] + 1 / tau2
+    return (s[:, 0] - s[:, 1]) / prec, prec**-0.5
+
+
 def support(d, day, ev, D):
     """Known positive mass of the candidate and of the user at the day's cutoff, and the density rank in the slate."""
     pu, pi, _, w = states.positives(d, day_ts(day))
