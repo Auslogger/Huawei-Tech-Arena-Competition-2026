@@ -21,3 +21,6 @@ build-backend = "uv_build"
 
 [tool.uv.build-backend]
 module-name = "hta"
+
+[tool.ruff]
+line-length = 120

@@ -1,4 +1,5 @@
 """Log-bilinear (NCE) user/item states and query-local user inference."""
+
 import time
 
 import numpy as np
@@ -17,17 +18,28 @@ def positives(d, T, start=0, query=None):
     query: events at or after T whose supplied histories also count. A query history holds only clicks before the cutoff, and
     the event's own outcome is never read, so this adds label-free evidence of exactly what those rows would show at scoring.
     """
-    ev = np.where((d.ts[:d.n_train] < T) & (d.ts[:d.n_train] >= start))[0]
+    ev = np.where((d.ts[: d.n_train] < T) & (d.ts[: d.n_train] >= start))[0]
     se = ev if query is None else np.r_[ev, query]
     m = d.hist_item[se] >= 0
     n = m.sum(1)
-    snap = (pl.DataFrame({"e": np.repeat(se, n), "u": np.repeat(d.user[se], n), "i": d.hist_item[se][m],
-                          "t": d.hist_ts[se][m]})
-            .group_by(["e", "u", "i", "t"]).len().group_by(["u", "i", "t"]).agg(pl.col("len").max().alias("c"))
-            .with_columns(pl.col("c").cast(pl.Int32)))
+    snap = (
+        pl.DataFrame(
+            {"e": np.repeat(se, n), "u": np.repeat(d.user[se], n), "i": d.hist_item[se][m], "t": d.hist_ts[se][m]}
+        )
+        .group_by(["e", "u", "i", "t"])
+        .len()
+        .group_by(["u", "i", "t"])
+        .agg(pl.col("len").max().alias("c"))
+        .with_columns(pl.col("c").cast(pl.Int32))
+    )
     r, c = np.where(d.y[ev] == 1)
-    lab = (pl.DataFrame({"u": d.user[ev[r]], "i": d.cand[ev[r], c], "t": d.ts[ev[r]]})
-           .group_by(["u", "i", "t"]).len().rename({"len": "l"}).with_columns(pl.col("l").cast(pl.Int32)))
+    lab = (
+        pl.DataFrame({"u": d.user[ev[r]], "i": d.cand[ev[r], c], "t": d.ts[ev[r]]})
+        .group_by(["u", "i", "t"])
+        .len()
+        .rename({"len": "l"})
+        .with_columns(pl.col("l").cast(pl.Int32))
+    )
     j = snap.join(lab, on=["u", "i", "t"], how="full", coalesce=True).fill_null(0)
     j = j.with_columns(pl.max_horizontal("c", "l").alias("w"))
     assert j["t"].max() < T, "positive at or after the cutoff"
@@ -52,7 +64,7 @@ def known_history(d, ev, T, L=64):
     stop = np.searchsorted(comp, u * (1 << 32) + first, "left")
     room = L - h.shape[1]
     old = np.full((len(ev), room), -1, np.int32)
-    take = np.minimum(stop - start, room) * (n == h.shape[1])  # a short history already holds all of that user's clicks
+    take = np.minimum(stop - start, room) * (n == h.shape[1])  # a short history already has all of that user's clicks
     r = np.repeat(np.arange(len(ev)), take)
     c = np.concatenate([np.arange(t) for t in take]) if take.sum() else np.zeros(0, int)
     old[r, c] = pi[np.repeat(stop - take, take) + c]
@@ -61,7 +73,7 @@ def known_history(d, ev, T, L=64):
 
 def exposures(d, T, start=0):
     """(user,item) rows of all offers strictly before T."""
-    ev = np.where((d.ts[:d.n_train] < T) & (d.ts[:d.n_train] >= start))[0]
+    ev = np.where((d.ts[: d.n_train] < T) & (d.ts[: d.n_train] >= start))[0]
     return np.repeat(d.user[ev], 10), d.cand[ev].ravel()
 
 
@@ -72,17 +84,46 @@ def exposure_index(eu, ei, n=NU):
     return np.r_[0, np.cumsum(counts)], ei[order]
 
 
-def fit_nce(pu, pi, w=None, k=64, epochs=20, batch=8192, neg=16, lr=.005, wd=.01, l2=.005, seed=113, init="svd",
-            device="cpu", power=.75, log=False, expo=None, mix=0., init_expo=None, beta=0., choice=None, gamma=0.,
-            noise_mass=None, iexpo=None, iota=0., sphere=0., drop=0., swa=0, cat=None, cmix=0., ucat=None):
+def fit_nce(
+    pu,
+    pi,
+    w=None,
+    k=64,
+    epochs=20,
+    batch=8192,
+    neg=16,
+    lr=0.005,
+    wd=0.01,
+    l2=0.005,
+    seed=113,
+    init="svd",
+    device="cpu",
+    power=0.75,
+    log=False,
+    expo=None,
+    mix=0.0,
+    init_expo=None,
+    beta=0.0,
+    choice=None,
+    gamma=0.0,
+    noise_mass=None,
+    iexpo=None,
+    iota=0.0,
+    sphere=0.0,
+    drop=0.0,
+    swa=0,
+    cat=None,
+    cmix=0.0,
+    ucat=None,
+):
     """Positive/noise logistic factorization. Noise is proposal-based, never an observed negative.
 
     expo=(offsets, items) draws noise from the user's own offer list, so the logit targets preference rather than
-    exposure x preference; users without offers, and a `mix` share of noise, fall back to the global proposal.
+    exposure x preference. Users without offers, and a `mix` share of noise, fall back to the global proposal.
     init_expo=(users, items) adds the offer graph with weight beta to the spectral start, for rare-item vectors.
     swa=n returns the mean of the iterates at the end of the last n epochs.
-    cat=(theta, lab, item_mass): noise from the exposure model, a category from the user's mix, then an item within it by mass;
-    a cmix share keeps the global proposal. ucat (users,K) offer counts: an iota share of the noise term contrasts the positive
+    cat=(theta, lab, item_mass): noise from the exposure model, a category from the user's mix, then an item within it by mass.
+    A cmix share keeps the global proposal. ucat (users,K) offer counts: an iota share of the noise term contrasts the positive
     with users drawn by how much they are offered the item's category, the mirror of cat.
     choice=(user, cand, y) adds gamma * slate-choice NLL that updates V only: U is detached, so users cannot memorise.
     """
@@ -90,7 +131,7 @@ def fit_nce(pu, pi, w=None, k=64, epochs=20, batch=8192, neg=16, lr=.005, wd=.01
     g = torch.Generator(device="cpu").manual_seed(seed)
     w = np.ones(len(pu), np.float32) if w is None else w
     mass = np.bincount(pi, weights=w, minlength=NI).astype(np.float64) if noise_mass is None else noise_mass
-    prop = mass ** power
+    prop = mass**power
     prop = prop / prop.sum()
     if init == "svd":
         B, _, _ = norm_incidence(pu, pi)
@@ -98,36 +139,38 @@ def fit_nce(pu, pi, w=None, k=64, epochs=20, batch=8192, neg=16, lr=.005, wd=.01
             Bx, _, _ = norm_incidence(*init_expo)
             B = sp.vstack([B, np.sqrt(beta) * Bx]).tocsr()
         _, s, Vt = rsvd(B, k, seed=seed)
-        V0 = Vt.T * np.sqrt(NI) * .3
+        V0 = Vt.T * np.sqrt(NI) * 0.3
         cnt = np.maximum(np.bincount(pu, weights=w, minlength=NU), 1)
         U0 = np.zeros((NU, k))
         np.add.at(U0, pu, V0[pi] * w[:, None])
         U0 = U0 / cnt[:, None]
     else:
         rng = np.random.default_rng(seed)
-        V0 = rng.standard_normal((NI, k)) * .1
-        U0 = rng.standard_normal((NU, k)) * .1
+        V0 = rng.standard_normal((NI, k)) * 0.1
+        U0 = rng.standard_normal((NU, k)) * 0.1
     dev = torch.device(device)
     U = torch.nn.Parameter(torch.tensor(U0, dtype=torch.float32, device=dev))
     V = torch.nn.Parameter(torch.tensor(V0, dtype=torch.float32, device=dev))
     b = torch.nn.Parameter(torch.zeros(NI, device=dev))
     groups = [{"params": [U, V, b], "weight_decay": wd}]
     if choice is not None:
-        A = torch.nn.Parameter(torch.eye(k, device=dev) * .5)
+        A = torch.nn.Parameter(torch.eye(k, device=dev) * 0.5)
         cb = torch.nn.Parameter(torch.zeros(NI, device=dev))
         c0 = torch.nn.Parameter(torch.tensor(-2.5, device=dev))
-        groups.append({"params": [A, cb, c0], "weight_decay": .01})
-        cu, cc, cy = [torch.as_tensor(a, device=dev) for a in (choice[0].astype(np.int64), choice[1].astype(np.int64),
-                                                               choice[2].astype(np.float32))]
+        groups.append({"params": [A, cb, c0], "weight_decay": 0.01})
+        cu, cc, cy = [
+            torch.as_tensor(a, device=dev)
+            for a in (choice[0].astype(np.int64), choice[1].astype(np.int64), choice[2].astype(np.float32))
+        ]
     opt = torch.optim.AdamW(groups, lr=lr)
     steps = epochs * max(len(pu) // batch, 1)
-    sched = torch.optim.lr_scheduler.CosineAnnealingLR(opt, steps, eta_min=.1 * lr)
+    sched = torch.optim.lr_scheduler.CosineAnnealingLR(opt, steps, eta_min=0.1 * lr)
     pt = torch.as_tensor(prop, dtype=torch.float32)
-    # alias-free noise: pre-draw a large pool and index it
+    # alias-free noise: draw a big pool up front and index into it
     pool = torch.multinomial(pt, min(50_000_000, max(len(pu) * neg, 1_000_000)), replacement=True, generator=g).to(dev)
     pu_t, pi_t = torch.as_tensor(pu.astype(np.int64), device=dev), torch.as_tensor(pi.astype(np.int64), device=dev)
     wt = torch.as_tensor(w, device=dev)
-    if iexpo is not None:  # offered-user lists per item, the mirror of `expo`
+    if iexpo is not None:  # offered-user lists per item, mirroring `expo`
         ioff = torch.as_tensor(iexpo[0].astype(np.int64), device=dev)
         ilst = torch.as_tensor(iexpo[1].astype(np.int64), device=dev)
     if expo is not None:
@@ -137,18 +180,28 @@ def fit_nce(pu, pi, w=None, k=64, epochs=20, batch=8192, neg=16, lr=.005, wd=.01
         th = torch.as_tensor(cat[0], device=dev)
         lab_t = torch.as_tensor(cat[1].astype(np.int64))
         ck = th.shape[1]
-        cpool = [torch.multinomial(torch.as_tensor(cat[2] * (cat[1] == c), dtype=torch.float32), 4_000_000, True, generator=g)
-                 for c in range(ck)]
+        cpool = [
+            torch.multinomial(
+                torch.as_tensor(cat[2] * (cat[1] == c), dtype=torch.float32), 4_000_000, True, generator=g
+            )
+            for c in range(ck)
+        ]
         cpool = torch.stack(cpool).to(dev)  # (K, pool)
         if ucat is not None:
-            upool = torch.stack([torch.multinomial(torch.as_tensor(ucat[:, c], dtype=torch.float32) + 1e-6, 4_000_000, True, generator=g)
-                                 for c in range(ck)]).to(dev)
+            upool = torch.stack(
+                [
+                    torch.multinomial(
+                        torch.as_tensor(ucat[:, c], dtype=torch.float32) + 1e-6, 4_000_000, True, generator=g
+                    )
+                    for c in range(ck)
+                ]
+            ).to(dev)
     t0, step = time.time(), 0
     for ep in range(epochs):
         order = torch.randperm(len(pu), generator=g).to(dev)
-        tot = 0.
+        tot = 0.0
         for s in range(0, len(pu) - batch + 1, batch):
-            idx = order[s:s + batch]
+            idx = order[s : s + batch]
             uu, ii, ww = pu_t[idx], pi_t[idx], wt[idx]
             nn = pool[torch.randint(len(pool), (len(idx) * neg,), generator=g).to(dev)].view(len(idx), neg)
             if expo is not None:
@@ -162,25 +215,25 @@ def fit_nce(pu, pi, w=None, k=64, epochs=20, batch=8192, neg=16, lr=.005, wd=.01
                 own = cpool[cc, torch.randint(cpool.shape[1], cc.shape, device=dev)]
                 nn = torch.where(torch.rand(len(idx), neg, device=dev) >= cmix, own, nn)
             ue, ve, ne = U[uu], V[ii], V[nn]
-            if sphere:  # unit vectors with shared temperature: direction only, and tau alone bounds capacity
-                ue, ve, ne = [F.normalize(x, dim=-1) * sphere ** .5 for x in (ue, ve, ne)]
+            if sphere:  # unit vectors with a shared temperature: direction only, tau alone bounds capacity
+                ue, ve, ne = [F.normalize(x, dim=-1) * sphere**0.5 for x in (ue, ve, ne)]
             if drop:
                 ue = F.dropout(ue, drop)
             pos = (ue * ve).sum(1) + b[ii]
             nsc = (ne * ue[:, None, :]).sum(2) + b[nn]
             noise = F.softplus(nsc).mean(1)
-            if ucat is not None:  # noise users: those the exposure model would show this item's category to
+            if ucat is not None:  # noise users: the ones the exposure model would show this item's category to
                 nu = upool[lab_t[ii.cpu()].to(dev)[:, None], torch.randint(upool.shape[1], (len(idx), neg), device=dev)]
                 sn2 = (U[nu] * ve[:, None, :]).sum(2) + b[ii][:, None]
                 noise = (1 - iota) * noise + iota * F.softplus(sn2).mean(1)
-            if iexpo is not None:  # noise users: others who were offered this same item
+            if iexpo is not None:  # noise users: others who were offered this exact item
                 lo, n = ioff[ii][:, None], (ioff[ii + 1] - ioff[ii])[:, None]
                 pick = (torch.rand(len(idx), neg, generator=g).to(dev) * n).long()
                 nu = ilst[(lo + pick).clamp(max=len(ilst) - 1)]
                 sn2 = (U[nu] * ve[:, None, :]).sum(2) + b[ii][:, None]
                 noise = (1 - iota) * noise + iota * F.softplus(sn2).mean(1)
-            loss = (ww * (.5 * F.softplus(-pos) + .5 * noise)).sum() / ww.sum()
-            reg = (ue.pow(2).sum(1).mean() + ve.pow(2).sum(1).mean() + ne.pow(2).sum(2).mean())
+            loss = (ww * (0.5 * F.softplus(-pos) + 0.5 * noise)).sum() / ww.sum()
+            reg = ue.pow(2).sum(1).mean() + ve.pow(2).sum(1).mean() + ne.pow(2).sum(2).mean()
             total = loss + l2 * reg
             if choice is not None:
                 e = torch.randint(len(cu), (2048,), generator=g).to(dev)
@@ -189,7 +242,7 @@ def fit_nce(pu, pi, w=None, k=64, epochs=20, batch=8192, neg=16, lr=.005, wd=.01
                 total = total + gamma * ll.mean()
             opt.zero_grad(set_to_none=True)
             total.backward()
-            torch.nn.utils.clip_grad_norm_([U, V, b], 5.)
+            torch.nn.utils.clip_grad_norm_([U, V, b], 5.0)
             opt.step()
             sched.step()
             tot += float(loss.detach())
@@ -197,21 +250,38 @@ def fit_nce(pu, pi, w=None, k=64, epochs=20, batch=8192, neg=16, lr=.005, wd=.01
         if log:
             print(f"ep {ep} loss {tot / max(len(pu) // batch, 1):.4f} {time.time() - t0:.0f}s", flush=True)
         if swa and ep >= epochs - swa:
-            avg = [p.detach().clone() for p in (U, V, b)] if ep == epochs - swa else \
-                [a + (p.detach() - a) / (ep - epochs + swa + 1) for a, p in zip(avg, (U, V, b))]
+            avg = (
+                [p.detach().clone() for p in (U, V, b)]
+                if ep == epochs - swa
+                else [a + (p.detach() - a) / (ep - epochs + swa + 1) for a, p in zip(avg, (U, V, b))]
+            )
     if swa:
         U.data, V.data, b.data = avg
     if sphere:
-        U.data, V.data = F.normalize(U.data, dim=-1) * sphere ** .5, F.normalize(V.data, dim=-1) * sphere ** .5
+        U.data, V.data = F.normalize(U.data, dim=-1) * sphere**0.5, F.normalize(V.data, dim=-1) * sphere**0.5
     return U.detach().cpu().numpy(), V.detach().cpu().numpy(), b.detach().cpu().numpy(), prop
 
 
 @torch.no_grad()
-def local_infer(U0, V, b, prop, hist, steps=15, lr=.5, l2=.005, seed=104842, n_refs=256, kappa=0., anchor=False,
-                own=None, own_w=.5):
-    """Own-history density update from prior U0 (n,k); hist (n,L) int items with -1 padding. Duplicates are kept.
+def local_infer(
+    U0,
+    V,
+    b,
+    prop,
+    hist,
+    steps=15,
+    lr=0.5,
+    l2=0.005,
+    seed=104842,
+    n_refs=256,
+    kappa=0.0,
+    anchor=False,
+    own=None,
+    own_w=0.5,
+):
+    """Own-history density update from prior U0 (n,k). hist (n,L) holds int items with -1 padding. Duplicates are kept.
 
-    kappa scales the data term by n/(n+kappa), so short histories move less; anchor pulls towards U0 instead of 0.
+    kappa scales the data term by n/(n+kappa), so short histories move less. anchor pulls towards U0 instead of 0.
     own (n,R) adds event-specific noise references, e.g. the slate, for states trained against the user's offers.
     """
     rng = np.random.default_rng(seed)
@@ -225,11 +295,11 @@ def local_infer(U0, V, b, prop, hist, steps=15, lr=.5, l2=.005, seed=104842, n_r
     Hv, Hb = Vt[h], bt[h]  # (n,L,k), (n,L)
     u0 = torch.as_tensor(U0)
     u = u0.clone()
-    has = (cnt[:, 0] > 0)
+    has = cnt[:, 0] > 0
     if own is not None:
         o = torch.as_tensor(own.astype(np.int64))
         Vo, bo = Vt[o], bt[o]
-    conf = cnt / (cnt + kappa) if kappa > 0 else 1.
+    conf = cnt / (cnt + kappa) if kappa > 0 else 1.0
     for _ in range(steps):
         sp = (Hv * u[:, None, :]).sum(2) + Hb
         gp = -((torch.sigmoid(-sp) * m)[..., None] * Hv).sum(1) / cnt.clamp(min=1)
@@ -238,7 +308,7 @@ def local_infer(U0, V, b, prop, hist, steps=15, lr=.5, l2=.005, seed=104842, n_r
         if own is not None:
             so = (Vo * u[:, None, :]).sum(2) + bo
             gn = (1 - own_w) * gn + own_w * (torch.sigmoid(so)[..., None] * Vo).mean(1)
-        g = conf * (.5 * gp + .5 * gn) + 2 * l2 * (u - u0 if anchor else u)
+        g = conf * (0.5 * gp + 0.5 * gn) + 2 * l2 * (u - u0 if anchor else u)
         u[has] -= lr * g[has]
     return u.numpy()
 
@@ -252,7 +322,7 @@ def procrustes(V, Vref):
 
 
 @torch.no_grad()
-def local_pairs(X0, F, off, row, col, w, F_noise, off_noise, steps=15, lr=.5, l2=.02):
+def local_pairs(X0, F, off, row, col, w, F_noise, off_noise, steps=15, lr=0.5, l2=0.02):
     """Entity-mean update of every row of X0 from its positive partners, the item-side twin of local_infer.
 
     The data term is a per-entity mean, so each entity moves the same distance whatever its count. off is per row.
@@ -269,6 +339,6 @@ def local_pairs(X0, F, off, row, col, w, F_noise, off_noise, steps=15, lr=.5, l2
         gp = torch.zeros_like(X).index_add_(0, row, -(w * torch.sigmoid(-s))[:, None] * Fc) / cnt.clamp(min=1)[:, None]
         sn = X @ F_noise.T + off[:, None] + off_noise
         gn = torch.sigmoid(sn) @ F_noise / len(F_noise)
-        g = .5 * gp + .5 * gn + 2 * l2 * X
+        g = 0.5 * gp + 0.5 * gn + 2 * l2 * X
         X[has] -= lr * g[has]
     return X.numpy()

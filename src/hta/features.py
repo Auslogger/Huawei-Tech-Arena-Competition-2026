@@ -1,4 +1,5 @@
 """Label-derived causal counters. Each row only sees events strictly earlier than its own timestamp."""
+
 import numpy as np
 
 from . import states
@@ -22,7 +23,7 @@ def _prior(keys, t, val):
 
 
 def pair_counts(d):
-    """(n_offer, n_click) per candidate row and (u_events, u_clicked_events) per event; cached."""
+    """(n_offer, n_click) per candidate row and (u_events, u_clicked_events) per event. Cached."""
     p = CACHE / "counts.npz"
     if p.exists():
         z = np.load(p)
@@ -31,7 +32,7 @@ def pair_counts(d):
     key = np.repeat(d.user, 10).astype(np.int64) * NI + d.cand.ravel()
     lab = np.maximum(d.y, 0).ravel().astype(np.int64)
     known = (d.y >= 0).ravel().astype(np.int64)
-    # unlabeled evaluation rows never contribute: give them group-unique behaviour by zero value and no count
+    # evaluation rows have no labels, so they get zero value and no count
     n_off, n_clk = _prior(key, t, lab)
     n_seen = _prior(key, t, known)[1]
     n_offer, n_click = n_seen.reshape(-1, 10).astype(np.int16), n_clk.reshape(-1, 10).astype(np.int16)
@@ -45,7 +46,8 @@ def pair_counts(d):
 def item_day_counts(d):
     """rows[day,item], clicks[day,item] of labelled rows on Jan 20+day."""
     from .lib import DAY, T0
-    day = (d.ts[:d.n_train] - T0) // DAY
+
+    day = (d.ts[: d.n_train] - T0) // DAY
     n = np.zeros((7, NI), np.int32)
     c = np.zeros((7, NI), np.int32)
     for k in range(7):
@@ -57,33 +59,48 @@ def item_day_counts(d):
 
 def scalars(d, ev, cut_day=None):
     """Per-candidate causal scalars for events `ev`. cut_day: Jan day whose start bounds global item statistics
-    (defaults to each event's own day); user and pair counters always use that user's strictly earlier events."""
+    (defaults to each event's own day). User and pair counters always use that user's strictly earlier events."""
     from .lib import DAY, T0
+
     no, nc, ue, uc = pair_counts(d)
     h, c = d.hist_item[ev], d.cand[ev]
     eq = c[:, :, None] == h[:, None, :]
     rep = eq.sum(2)
     N, C = no[ev].astype(np.float32), nc[ev].astype(np.float32)
     reject = np.maximum(N - C, 0)
-    a, b = 7., 4.  # Beta prior for the event click rate, mean .63, strength from between-user dispersion
+    a, b = 7.0, 4.0  # Beta prior on the event click rate: mean .63, strength set by how much users differ
     rate = (uc[ev] + a) / (ue[ev] + a + b)
     u_logit = np.log(rate / (1 - rate))
     n_hist = (h >= 0).sum(1)
     last = np.where(n_hist > 0, d.hist_ts[ev].max(1), d.ts[ev] - 30 * DAY)
-    last_age = np.log1p(np.minimum((d.ts[ev] - last) / 86400., 30))
+    last_age = np.log1p(np.minimum((d.ts[ev] - last) / 86400.0, 30))
     day = np.minimum((d.ts[ev] - T0) // DAY, 7) if cut_day is None else np.full(len(ev), cut_day - 20)
     n, k = item_day_counts(d)
     cn, ck = np.cumsum(n, 0), np.cumsum(k, 0)
-    prior = .0629
+    prior = 0.0629
     ni = np.where(day[:, None] > 0, cn[np.maximum(day - 1, 0)[:, None], c], 0).astype(np.float32)
     ci = np.where(day[:, None] > 0, ck[np.maximum(day - 1, 0)[:, None], c], 0).astype(np.float32)
     p = (ci + 50 * prior) / (ni + 50)
     i_logit = np.log(p / (1 - p))
     rp = lambda v: np.repeat(np.asarray(v, np.float32)[:, None], 10, 1)
     rival_rep = (rep.sum(1, keepdims=True) - rep).astype(np.float32)
-    x = np.stack([np.log1p(N), np.log1p(C), np.log1p(reject), (reject > 0) & (rep > 0), rival_rep,
-                  rp(u_logit), rp(np.log1p(ue[ev])), rp(n_hist / 20.), rp(n_hist == 0), rp(last_age),
-                  i_logit, np.log1p(ni)], -1)
+    x = np.stack(
+        [
+            np.log1p(N),
+            np.log1p(C),
+            np.log1p(reject),
+            (reject > 0) & (rep > 0),
+            rival_rep,
+            rp(u_logit),
+            rp(np.log1p(ue[ev])),
+            rp(n_hist / 20.0),
+            rp(n_hist == 0),
+            rp(last_age),
+            i_logit,
+            np.log1p(ni),
+        ],
+        -1,
+    )
     return x.astype(np.float32)
 
 
@@ -106,10 +123,23 @@ def support(d, day, ev, D):
     """Known positive mass of the candidate and of the user at the day's cutoff, and the density rank in the slate."""
     pu, pi, _, w = states.positives(d, day_ts(day))
     ni, nu = np.bincount(pi, weights=w, minlength=NI), np.bincount(pu, weights=w, minlength=NU)
-    rank = D[..., 0].argsort(1).argsort(1) / 9.
-    return np.stack([np.log1p(ni[d.cand[ev]]), np.repeat(np.log1p(nu[d.user[ev]])[:, None], 10, 1), rank],
-                    -1).astype(np.float32)
+    rank = D[..., 0].argsort(1).argsort(1) / 9.0
+    return np.stack([np.log1p(ni[d.cand[ev]]), np.repeat(np.log1p(nu[d.user[ev]])[:, None], 10, 1), rank], -1).astype(
+        np.float32
+    )
 
 
-SCALAR_NAMES = ["log_offers", "log_clicks", "log_rejects", "rejected_repeat", "rival_repeat", "u_logit", "log_u_events",
-                "hist_frac", "hist_empty", "last_age", "i_logit", "log_i_rows"]
+SCALAR_NAMES = [
+    "log_offers",
+    "log_clicks",
+    "log_rejects",
+    "rejected_repeat",
+    "rival_repeat",
+    "u_logit",
+    "log_u_events",
+    "hist_frac",
+    "hist_empty",
+    "last_age",
+    "i_logit",
+    "log_i_rows",
+]

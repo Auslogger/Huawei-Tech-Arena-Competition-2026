@@ -1,4 +1,5 @@
 """Fixed-candidate transfer checks. Usage: python -m hta.transfer NAME cut[,cut...] [seed,seed] [run_seed key=value...]."""
+
 import json
 import sys
 
@@ -15,20 +16,26 @@ def main():
     d = D()
     for cut in cuts:
         T = day_ts(cut)
-        q = first_events(d, T, day_ts(27))  # every user's first event after the cutoff, all genuine delays
+        q = first_events(d, T, day_ts(27))  # each user's first event after the cutoff, all genuine delays
         check_query(d, q, cut)
-        delay = (d.ts[q] - T) / 3600.
+        delay = (d.ts[q] - T) / 3600.0
         day1 = delay < 24
-        s, h = 0., 0.
+        s, h = 0.0, 0.0
         for i, seed in enumerate(seeds):
             o = {}
             p, lq, _ = model.run_seed(d, cut, q, seed, train_out=o, **opts)
             np.save(RUNS / f"{name}_c{cut}_s{seed}.npy", p.astype(np.float32))
-            leak_gap("stack", d.y[o["ev"]], o["logit"], d.y[q], p, tol=.05)
+            leak_gap("stack", d.y[o["ev"]], o["logit"], d.y[q], p, tol=0.05)
             s, h = s + p, h + lq
-            r = {"cut": cut, "n_seeds": i + 1, "day1_events": int(day1.sum()),
-                 "day1": round(auc(d.y[q][day1], s[day1]), 6), "all_delay": round(auc(d.y[q], s), 6),
-                 "day1_head": round(auc(d.y[q][day1], h[day1]), 6), "all_events": len(q)}
+            r = {
+                "cut": cut,
+                "n_seeds": i + 1,
+                "day1_events": int(day1.sum()),
+                "day1": round(auc(d.y[q][day1], s[day1]), 6),
+                "all_delay": round(auc(d.y[q], s), 6),
+                "day1_head": round(auc(d.y[q][day1], h[day1]), 6),
+                "all_events": len(q),
+            }
             for lo, hi in [(24, 48), (48, 96), (96, 200)]:
                 m = (delay >= lo) & (delay < hi)
                 if m.sum() > 500:

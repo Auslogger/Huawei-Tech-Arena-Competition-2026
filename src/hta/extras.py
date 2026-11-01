@@ -1,4 +1,5 @@
 """Optional per-candidate tree inputs. Each block returns (n,10,c) floats and is causal at its `day` cutoff."""
+
 import numpy as np
 import scipy.sparse as sp
 from sklearn.cluster import KMeans
@@ -19,21 +20,21 @@ def pooled_sim(d, ev, V):
     Vn = Vn.astype(np.float32)
     out = np.zeros((len(ev), 10, 5), np.float32)
     for i in range(0, len(ev), 20000):
-        e = ev[i:i + 20000]
+        e = ev[i : i + 20000]
         h = d.hist_item[e]
         m = h >= 0
         S = np.einsum("nij,nkj->nik", Vn[d.cand[e]], Vn[np.maximum(h, 0)], optimize=True)
-        S = np.where(m[:, None, :], S, -2.)
+        S = np.where(m[:, None, :], S, -2.0)
         srt = np.sort(S, 2)[:, :, ::-1]
         has = m.sum(1, keepdims=True) > 0
         cnt = np.maximum(m.sum(1, keepdims=True), 1)
         mean = (np.where(m[:, None, :], S, 0).sum(2)) / cnt
         top3 = np.where(srt[:, :, :3] > -2, srt[:, :, :3], 0).sum(2) / np.minimum(cnt, 3)
-        out[i:i + len(e), :, 0] = np.where(has, srt[:, :, 0], 0)
-        out[i:i + len(e), :, 1] = top3
-        out[i:i + len(e), :, 2] = mean
-        out[i:i + len(e), :, 3] = (S > .5).sum(2)
-        out[i:i + len(e), :, 4] = rival(np.where(has, srt[:, :, 0], 0))
+        out[i : i + len(e), :, 0] = np.where(has, srt[:, :, 0], 0)
+        out[i : i + len(e), :, 1] = top3
+        out[i : i + len(e), :, 2] = mean
+        out[i : i + len(e), :, 3] = (S > 0.5).sum(2)
+        out[i : i + len(e), :, 4] = rival(np.where(has, srt[:, :, 0], 0))
     return out
 
 
@@ -109,17 +110,18 @@ def rate_features(d, ev):
     per day and the labelled window gives events per day, so their ratio estimates propensity."""
     from .features import pair_counts
     from .lib import DAY, T0
+
     h, ht, t = d.hist_item[ev], d.hist_ts[ev], d.ts[ev]
     n = (h >= 0).sum(1)
     first = np.where(n > 0, ht[:, 0], t)
     last = np.where(n > 0, ht.max(1), t)
-    span = np.maximum((last - first) / 86400., 1 / 24)
+    span = np.maximum((last - first) / 86400.0, 1 / 24)
     click_rate = np.where(n >= 2, (n - 1) / span, 0)
-    to_query = np.maximum((t - first) / 86400., 1 / 24)
+    to_query = np.maximum((t - first) / 86400.0, 1 / 24)
     rate2 = np.where(n >= 1, n / to_query, 0)
     _, _, ue, uc = pair_counts(d)
-    elapsed = np.maximum((t - T0) / 86400., .25)
-    ev_rate = (ue[ev] + .5) / elapsed
+    elapsed = np.maximum((t - T0) / 86400.0, 0.25)
+    ev_rate = (ue[ev] + 0.5) / elapsed
     ratio = np.log1p(click_rate) - np.log(ev_rate)
     ratio2 = np.log1p(rate2) - np.log(ev_rate)
     x = np.stack([np.log1p(click_rate), np.log1p(rate2), np.log(ev_rate), ratio, ratio2, np.log1p(span)], -1)
@@ -147,7 +149,7 @@ def slate_focus(d, ev, V, lab=None, K=16):
 
 
 def known_clicks(d):
-    """All clicks of each (user,item) known strictly before the row's event, beyond the 20-item window; cached."""
+    """All clicks of each (user,item) known strictly before the row's event, beyond the 20-item window. Cached."""
     p = CACHE / "known_clicks.npy"
     if p.exists():
         return np.load(p)

@@ -1,8 +1,9 @@
 """End-to-end candidate: causal daily states -> shared bilinear choice head -> LightGBM residual.
 
-Every training day uses the producer fitted strictly before that day; query events use the producer at the cutoff.
+Every training day uses the producer fitted strictly before that day, and query events use the producer at the cutoff.
 Labels never enter a state of the event they train on. Scores are returned as log-odds, one array per seed.
 """
+
 import json
 import time
 
@@ -12,8 +13,19 @@ import numpy as np
 from . import features, head, pipe
 from .lib import NI, RUNS, THREADS, day_ts, first_events
 
-LGB = dict(objective="binary", learning_rate=.03, num_leaves=31, min_data_in_leaf=200, feature_fraction=.5,
-           bagging_fraction=.8, bagging_freq=1, lambda_l2=30., max_bin=63, verbose=-1, num_threads=THREADS)
+LGB = dict(
+    objective="binary",
+    learning_rate=0.03,
+    num_leaves=31,
+    min_data_in_leaf=200,
+    feature_fraction=0.5,
+    bagging_fraction=0.8,
+    bagging_freq=1,
+    lambda_l2=30.0,
+    max_bin=63,
+    verbose=-1,
+    num_threads=THREADS,
+)
 
 
 def logit_of(lp):
@@ -24,10 +36,18 @@ def logit_of(lp):
 def table(lp, D, X, S):
     """Tree inputs: marginal log-odds, event click log-odds, and every per-candidate scalar."""
     l = logit_of(lp)
-    e = np.minimum(np.exp(lp).sum(1), .999)
+    e = np.minimum(np.exp(lp).sum(1), 0.999)
     ev = np.repeat(np.log(e / (1 - e)), 10)
-    F = np.concatenate([l.reshape(-1, 1), ev[:, None], D.reshape(-1, D.shape[-1]), X.reshape(-1, X.shape[-1]),
-                        S.reshape(-1, S.shape[-1])], 1)
+    F = np.concatenate(
+        [
+            l.reshape(-1, 1),
+            ev[:, None],
+            D.reshape(-1, D.shape[-1]),
+            X.reshape(-1, X.shape[-1]),
+            S.reshape(-1, S.shape[-1]),
+        ],
+        1,
+    )
     return F.astype(np.float32), l.ravel()
 
 
@@ -45,17 +65,19 @@ def marginal_logit(z):
 
 def event_objective(y):
     """LightGBM objective: outside-option NLL of each event. y (n,10). Scores are utilities, so a slate's rows compete."""
+
     def f(preds, _):
         s = preds.reshape(-1, 10)
-        top = np.maximum(s.max(1, keepdims=True), 0.)
+        top = np.maximum(s.max(1, keepdims=True), 0.0)
         e = np.exp(s - top)
         p = e / (np.exp(-top) + e.sum(1, keepdims=True))
         return (p - y).ravel(), np.maximum(p * (1 - p), 1e-6).ravel()
+
     return f
 
 
 def user_day_weight(d, ev, alpha):
-    """Event weight 1/n^alpha, n = that user's events in this block; the hidden set counts every user once."""
+    """Event weight 1/n^alpha, n = that user's events in this block. The hidden set counts every user once."""
     if alpha == 0:
         return None
     _, inv, cnt = np.unique(d.user[ev], return_inverse=True, return_counts=True)
@@ -63,9 +85,36 @@ def user_day_weight(d, ev, alpha):
     return w * len(w) / w.sum()
 
 
-def run_seed(d, cut, test_ev, seed, cfg=pipe.CFG, lam=.1, trees=300, extra=None, log=print, alpha=0., tree_alpha=None,
-             views=None, blocks=False, params=None, train_out=None, first_day=21, day_std=0, oof=0, support=0,
-             extra_head=None, pop=0, cats=0, head_u=0, lam_b=None, prx=0, te=0, slate=None, slate_base=0):
+def run_seed(
+    d,
+    cut,
+    test_ev,
+    seed,
+    cfg=pipe.CFG,
+    lam=0.1,
+    trees=300,
+    extra=None,
+    log=print,
+    alpha=0.0,
+    tree_alpha=None,
+    views=None,
+    blocks=False,
+    params=None,
+    train_out=None,
+    first_day=21,
+    day_std=0,
+    oof=0,
+    support=0,
+    extra_head=None,
+    pop=0,
+    cats=0,
+    head_u=0,
+    lam_b=None,
+    prx=0,
+    te=0,
+    slate=None,
+    slate_base=0,
+):
     """Fit on labelled days [21, cut) and return log-odds (n_test,10) for test_ev. alpha reweights heavy users.
 
     views: list of state configs, concatenated per day. blocks=True drops cross-view head interactions.
@@ -75,6 +124,7 @@ def run_seed(d, cut, test_ev, seed, cfg=pipe.CFG, lam=.1, trees=300, extra=None,
     t0 = time.time()
     if cats:
         from . import groups
+
         extra_head = groups.Cats(d, cut, rich=cats)
     if head_u:
         inner = extra_head
@@ -82,20 +132,25 @@ def run_seed(d, cut, test_ev, seed, cfg=pipe.CFG, lam=.1, trees=300, extra=None,
         def extra_head(day, ev, P):
             S = features.scalars(d, ev, cut_day=None if day < cut else cut)[..., [5, 6, 7, 8, 9]]
             return S if inner is None else np.concatenate([inner(day, ev, P), S], -1)
+
     views = [cfg] if views is None else views
     Ps = [pipe.Producer(d, first_day, cut, seed=seed, **c) for c in views]
     if prx:
+
         def extra(day, ev, P):
             U, V, b, prop = P.st[day]
             Q = np.linalg.svd(V, full_matrices=False)[2][:prx].T
             Up, Vp = (U @ Q).astype(np.float32), (V @ Q).astype(np.float32)
-            u = pipe.states.local_infer(Up[d.user[ev]], Vp, b, prop, d.hist_item[ev], l2=.02)
+            u = pipe.states.local_infer(Up[d.user[ev]], Vp, b, prop, d.hist_item[ev], l2=0.02)
             return pipe.density_x(u, Vp, b, d.cand[ev])[..., [0, 2, 3, 4]]
 
     def inputs(day, ev):
         parts = [p.inputs(day, ev) for p in Ps]
-        return (np.concatenate([x[0] for x in parts], 1), np.concatenate([x[1] for x in parts], 1),
-                np.concatenate([x[2] for x in parts], -1))
+        return (
+            np.concatenate([x[0] for x in parts], 1),
+            np.concatenate([x[1] for x in parts], 1),
+            np.concatenate([x[2] for x in parts], -1),
+        )
 
     P = Ps[0]
     days = list(range(first_day, cut))
@@ -132,15 +187,19 @@ def run_seed(d, cut, test_ev, seed, cfg=pipe.CFG, lam=.1, trees=300, extra=None,
     su = lambda a: scale(a, moments(a) if day_std > 1 else mu)
     sv = lambda a: scale(a, moments(a) if day_std else mv)
     sx = lambda a: np.clip((a - xm) / xs, -8, 8)
-    groups = [head.Group(su(u), sv(V), d.cand[ev], d.y[ev], sx(np.concatenate([X, D], -1)),
-                         user_day_weight(d, ev, alpha)) for ev, u, V, D, X, S in data]
+    groups = [
+        head.Group(su(u), sv(V), d.cand[ev], d.y[ev], sx(np.concatenate([X, D], -1)), user_day_weight(d, ev, alpha))
+        for ev, u, V, D, X, S in data
+    ]
     blk = [p.st[cut][1].shape[1] for p in Ps] if blocks and len(Ps) > 1 else None
     m = head.fit_groups(groups, lam=lam, iters=300, blocks=blk)
     gq = head.Group(su(uq), sv(Vq), d.cand[test_ev], None, sx(np.concatenate([Xq, Dq], -1)))
     lpq = head.score_group(m, gq)
 
-    heads = [head.fit_groups(groups[:i] + groups[i + 1:], lam=lam, iters=300, blocks=blk)
-             if oof and len(groups) > 1 else m for i in range(len(groups))]
+    heads = [
+        head.fit_groups(groups[:i] + groups[i + 1 :], lam=lam, iters=300, blocks=blk) if oof and len(groups) > 1 else m
+        for i in range(len(groups))
+    ]
     tabs = [table(head.score_group(h, g), x[3], x[4], x[5]) for h, g, x in zip(heads, groups, data)]
     F, base = np.concatenate([a for a, _ in tabs]), np.concatenate([b for _, b in tabs])
     lab = np.concatenate([d.y[x[0]].ravel() for x in data])
@@ -157,13 +216,19 @@ def run_seed(d, cut, test_ev, seed, cfg=pipe.CFG, lam=.1, trees=300, extra=None,
         ds = lgb.Dataset(F, label=lab, init_score=base, weight=wt, free_raw_data=True)
         b = lgb.train({**LGB, "seed": seed, **(params or {})}, ds, num_boost_round=trees)
         out = (lq + b.predict(Fq, raw_score=True)).reshape(-1, 10)
-    if train_out is not None and train_out.get("keep"):  # the tree's own tables, for another stacker
-        train_out.update(F=F.reshape(-1, 10, F.shape[-1]), Fq=Fq.reshape(-1, 10, Fq.shape[-1]), base=base.reshape(-1, 10))
-    if train_out is not None:  # stacked log-odds of the training rows, for a later residual stage
+    if train_out is not None and train_out.get("keep"):  # keep the tree's own tables around for another stacker
+        train_out.update(
+            F=F.reshape(-1, 10, F.shape[-1]), Fq=Fq.reshape(-1, 10, Fq.shape[-1]), base=base.reshape(-1, 10)
+        )
+    if train_out is not None:  # stacked log-odds of the training rows, used by a later residual stage
         raw = b.predict(F, raw_score=True).reshape(-1, 10)
-        train_out.update(ev=np.concatenate([x[0] for x in data]), head=base.reshape(-1, 10),
-                         logit=marginal_logit(utility(base.reshape(-1, 10)) + raw) if te else base.reshape(-1, 10) + raw,
-                         su=np.concatenate([su(x[1]) for x in data]), suq=su(uq))
+        train_out.update(
+            ev=np.concatenate([x[0] for x in data]),
+            head=base.reshape(-1, 10),
+            logit=marginal_logit(utility(base.reshape(-1, 10)) + raw) if te else base.reshape(-1, 10) + raw,
+            su=np.concatenate([su(x[1]) for x in data]),
+            suq=su(uq),
+        )
     log(f"  seed {seed} cut {cut}: head+tree done in {time.time() - t0:.0f}s")
     return out, lq.reshape(-1, 10), b
 

@@ -1,9 +1,10 @@
 """Exposure-corrected user affinity for item groups, the structure in the data that no preference table holds.
 
-Offers show which groups a user is exposed to; clicks show which they take. A user's click share in a group means little
+Offers show which groups a user is exposed to, clicks show which they take. A user's click share in a group means little
 without their offer share in it, so the signal is the lift between the two. Offers are label-free and plentiful, and they are
 stationary, so a user's offer share also corrects warm-up clicks, whose own offers were never logged.
 """
+
 import numpy as np
 import scipy.sparse as sp
 from scipy.special import digamma, gammaln
@@ -12,14 +13,14 @@ from sklearn.cluster import KMeans
 from . import extras, features, states
 from .lib import CACHE, NI, NU, day_ts, norm_incidence, rsvd
 
-K = 10  # offer factors have nine strong dimensions, whose well-offered items sit on a ten-vertex simplex
+K = 10  # offer factors have nine strong dimensions, and well-offered items sit on a ten-vertex simplex
 
 
-def categories(d, cut, iters=12, alpha=2., evalrows=False):
+def categories(d, cut, iters=12, alpha=2.0, evalrows=False):
     """Each item's category from label-free offers before the cut: spectral start, then hard EM on users' category mixes.
 
     An item's offers vote through the offered users' shares, so even a rarely offered item is placed by tens of informative
-    votes. evalrows adds the evaluation slates, which are label-free too; use it only at the final cut.
+    votes. evalrows adds the evaluation slates, which are label-free too. Only use it at the final cut.
     """
     p = CACHE / f"cat{K}_c{cut}{'_e' if evalrows else ''}.npy"
     if p.exists():
@@ -41,8 +42,8 @@ def categories(d, cut, iters=12, alpha=2., evalrows=False):
         H = np.asarray((X @ Z).todense(), np.float64)
         pi_ = (H.sum(0) + 1) / (H.sum() + K)
         th = (H + alpha * pi_) / (H.sum(1, keepdims=True) + alpha)
-        size = np.bincount(lab, minlength=K) + 1.
-        ll = np.asarray(X.T @ (np.log(th / pi_) * 1.), np.float64)  # log likelihood ratio of each category per item
+        size = np.bincount(lab, minlength=K) + 1.0
+        ll = np.asarray(X.T @ (np.log(th / pi_) * 1.0), np.float64)  # per-item log likelihood ratio for each category
         new = (ll + np.log(size / size.sum())).argmax(1)
         changed = (new != lab).mean()
         lab = new
@@ -53,7 +54,7 @@ def categories(d, cut, iters=12, alpha=2., evalrows=False):
 
 
 class Lift:
-    def __init__(self, d, cut, Ks=(16,), a=3., L=64, labs=None):
+    def __init__(self, d, cut, Ks=(16,), a=3.0, L=64, labs=None):
         self.d, self.cut, self.Ks, self.a, self.L = d, cut, Ks, a, L
         self.labs = labs if labs is not None else {K_: extras.exposure_clusters(d, cut, K_) for K_ in Ks}
         n = d.n_train
@@ -65,8 +66,9 @@ class Lift:
         for K, lab in self.labs.items():
             keys = np.repeat(d.user, 10).astype(np.int64) * K + lab[d.cand].ravel()
             self.tab[K] = features.prior_sum(keys, t, vals).reshape(-1, 10, 2)
-        self.u = features.prior_sum(d.user.astype(np.int64), d.ts.astype(np.int64),
-                                    np.stack([(d.y[:, 0] >= 0) * 10., y.sum(1)], 1))
+        self.u = features.prior_sum(
+            d.user.astype(np.int64), d.ts.astype(np.int64), np.stack([(d.y[:, 0] >= 0) * 10.0, y.sum(1)], 1)
+        )
 
     def __call__(self, day, ev, _=None, hist=None):
         """(n,10,c) per K: lift of all known clicks against offer share, labelled lift, log offer share, log offers, log clicks."""
@@ -137,10 +139,21 @@ class Cats:
             tot = np.bincount(self.lab, weights=n_i, minlength=K)
             pop = np.log((n_i[d.cand[ev]] + 1) / (tot[g] + K))
             rp = lambda a: np.repeat(a, 10, 1)
-            parts.append(np.stack([ls, ls - ls.mean(1, keepdims=True), rp(ent), rp(th.max(1, keepdims=True)), pop,
-                                   pop - pop.mean(1, keepdims=True)], -1).astype(np.float32))
+            parts.append(
+                np.stack(
+                    [
+                        ls,
+                        ls - ls.mean(1, keepdims=True),
+                        rp(ent),
+                        rp(th.max(1, keepdims=True)),
+                        pop,
+                        pop - pop.mean(1, keepdims=True),
+                    ],
+                    -1,
+                ).astype(np.float32)
+            )
         if self.mix is not None:
-            a, b = self.mix.scores(ev, self.mix.clicks(day, ev, hist), 2., .55)
+            a, b = self.mix.scores(ev, self.mix.clicks(day, ev, hist), 2.0, 0.55)
             parts.append(np.stack([a, a - a.mean(1, keepdims=True), b], -1).astype(np.float32))
         if self.rich > 2:
             m = hist >= 0
@@ -153,7 +166,7 @@ class Cats:
         return np.concatenate(parts, -1)
 
 
-def noise_tables(d, cut, power=.75, alpha=2., tilt=1.):
+def noise_tables(d, cut, power=0.75, alpha=2.0, tilt=1.0):
     """(theta (users,K), labels, item mass) for the exposure model: a category from the user's mix, then an item by offers.
 
     tilt=1+beta draws categories as clicks do, not as offers do, so the table need not absorb the category term at all.
@@ -164,7 +177,7 @@ def noise_tables(d, cut, power=.75, alpha=2., tilt=1.):
     np.add.at(H, (eu, lab[ei]), 1)
     pi_ = (H.sum(0) + 1) / (H.sum() + K)
     th = (H + alpha * pi_) / (H.sum(1, keepdims=True) + alpha)
-    th = th ** tilt
+    th = th**tilt
     th = th / th.sum(1, keepdims=True)
     return th.astype(np.float32), lab, np.bincount(ei, minlength=NI).astype(np.float64) ** power
 
@@ -209,9 +222,14 @@ class Mix:
         self.own = np.stack([(g == k).sum(1) for k in range(K)], 1).astype(np.float64)
         known = self.own * (np.arange(d.n) < d.n_train)[:, None]
         self.past = features.prior_sum(d.user.astype(np.int64), d.ts.astype(np.int64), known)
-        cut_rows = d.ts[:d.n_train] < day_ts(min(cut, 27))
-        Hc = np.stack([np.bincount(d.user[:d.n_train][cut_rows], weights=known[:d.n_train, k][cut_rows], minlength=NU)
-                       for k in range(K)], 1)
+        cut_rows = d.ts[: d.n_train] < day_ts(min(cut, 27))
+        Hc = np.stack(
+            [
+                np.bincount(d.user[: d.n_train][cut_rows], weights=known[: d.n_train, k][cut_rows], minlength=NU)
+                for k in range(K)
+            ],
+            1,
+        )
         self.alpha = dirichlet(Hc)
 
     def clicks(self, day, ev, hist=None):
@@ -221,7 +239,7 @@ class Mix:
         np.add.at(C, (np.nonzero(m)[0], self.lab[hist[m]]), 1)
         return C
 
-    def scores(self, ev, C, gamma=1., beta=.55):
+    def scores(self, ev, C, gamma=1.0, beta=0.55):
         """(n,10) log E[theta_c^beta] and E[log theta_c] for each candidate's category."""
         A = self.alpha + self.past[ev] + self.own[ev] + gamma * C
         g = self.lab[self.d.cand[ev]]
@@ -230,7 +248,7 @@ class Mix:
         return gammaln(a + beta) - gammaln(a) + gammaln(t) - gammaln(t + beta), digamma(a) - digamma(t)
 
 
-def em(eu, ei, lab, K_, iters=12, alpha=2.):
+def em(eu, ei, lab, K_, iters=12, alpha=2.0):
     """Hard EM on offers: each item goes where its offered users' mixes make it likeliest."""
     X = sp.csr_matrix((np.ones(len(eu), np.float32), (eu, ei)), shape=(NU, NI))
     X.sum_duplicates()
@@ -239,8 +257,8 @@ def em(eu, ei, lab, K_, iters=12, alpha=2.):
         H = np.asarray((X @ Z).todense(), np.float64)
         pi_ = (H.sum(0) + 1) / (H.sum() + K_)
         th = (H + alpha * pi_) / (H.sum(1, keepdims=True) + alpha)
-        size = np.bincount(lab, minlength=K_) + 1.
-        ll = np.asarray(X.T @ (np.log(th / pi_) * 1.), np.float64)
+        size = np.bincount(lab, minlength=K_) + 1.0
+        ll = np.asarray(X.T @ (np.log(th / pi_) * 1.0), np.float64)
         new = (ll + np.log(size / size.sum())).argmax(1)
         changed = (new != lab).mean()
         lab = new
@@ -249,12 +267,13 @@ def em(eu, ei, lab, K_, iters=12, alpha=2.):
     return lab
 
 
-def leaves(d, cut, kmax=6, dims=4, sil=.3, log=None):
+def leaves(d, cut, kmax=6, dims=4, sil=0.3, log=None):
     """Second level of the taxonomy: split each category by its own offer factors where a clear split exists, then refine by EM."""
     p = CACHE / f"leaf_c{cut}.npy"
     if p.exists():
         return np.load(p)
     from sklearn.metrics import silhouette_score
+
     lab = categories(d, cut)
     eu, ei = states.exposures(d, day_ts(cut))
     off = np.bincount(ei, minlength=NI)
@@ -263,8 +282,8 @@ def leaves(d, cut, kmax=6, dims=4, sil=.3, log=None):
     for c in range(K):
         m = lab[ei] == c
         B, _, _ = norm_incidence(eu[m], ei[m])
-        Vc = rsvd(B, dims + 3, power=8, seed=c)[2].T[:, 1:dims + 1]
-        items = np.where((lab == c) & (off >= max(50, np.quantile(off[lab == c], .3))))[0]
+        Vc = rsvd(B, dims + 3, power=8, seed=c)[2].T[:, 1 : dims + 1]
+        items = np.where((lab == c) & (off >= max(50, np.quantile(off[lab == c], 0.3))))[0]
         Y = Vc / np.maximum(np.linalg.norm(Vc, axis=1, keepdims=True), 1e-12)
         best, score, cen = 1, sil, None
         sub = np.random.default_rng(c).choice(len(items), min(2500, len(items)), replace=False)

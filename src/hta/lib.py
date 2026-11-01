@@ -1,4 +1,5 @@
 """Shared data access, splits, metrics and fast linear algebra."""
+
 import os
 from pathlib import Path
 
@@ -12,7 +13,9 @@ RUNS = ROOT / "runs"
 T0 = 1737331200  # 2025-01-20 00:00 UTC
 DAY = 86400
 NU, NI = 54456, 50000
-THREADS = int(os.environ.get("HTA_THREADS", 8))  # 8 beats 10 here: the efficiency cores stall the performance threads
+THREADS = int(
+    os.environ.get("HTA_THREADS", 8)
+)  # 8 is faster than 10 here because the efficiency cores stall the performance threads
 
 
 def day_ts(jan):
@@ -49,13 +52,13 @@ def auc(y, s):
 
 
 def _wauc(y, w):
-    """AUC of rows already sorted by score, with row weights w; score ties are broken by sort order."""
+    """AUC of rows already sorted by score, with row weights w. Score ties are broken by sort order."""
     pos, neg = w * y, w * (1 - y)
     return (pos * np.cumsum(neg)).sum() / (pos.sum() * neg.sum())
 
 
 def paired_gain(y, new, base, B=300, seed=0):
-    """Global AUC gain of new over base with (q05, q95) from resampling whole events; y, new, base are (n,10)."""
+    """Global AUC gain of new over base with (q05, q95) from resampling whole events. y, new, base are (n,10)."""
     y, new, base = np.asarray(y), np.asarray(new), np.asarray(base)
     Y = y.ravel().astype(np.float64)
     a, b = np.argsort(new.ravel()), np.argsort(base.ravel())
@@ -64,7 +67,7 @@ def paired_gain(y, new, base, B=300, seed=0):
     for i in range(B):
         w = np.repeat(np.bincount(rng.integers(len(y), size=len(y)), minlength=len(y)), y.shape[1]).astype(np.float64)
         g[i] = _wauc(Y[a], w[a]) - _wauc(Y[b], w[b])
-    return auc(y, new) - auc(y, base), float(np.quantile(g, .05)), float(np.quantile(g, .95))
+    return auc(y, new) - auc(y, base), float(np.quantile(g, 0.05)), float(np.quantile(g, 0.95))
 
 
 def check_query(d, ev, cut):
@@ -72,7 +75,7 @@ def check_query(d, ev, cut):
     assert d.hist_ts[ev].max() < day_ts(cut), f"cut {cut}: query history reaches the cutoff"
 
 
-def leak_gap(name, y_fit, s_fit, y_next, s_next, tol=.03):
+def leak_gap(name, y_fit, s_fit, y_next, s_next, tol=0.03):
     """Standing check for supervised stages: rows they fit on must not score far above rows they have not seen.
 
     A fitted table holding its training events' labels shows AUC .92 on them against .77 next day (attempts.md).
@@ -83,7 +86,7 @@ def leak_gap(name, y_fit, s_fit, y_next, s_next, tol=.03):
 
 
 def rsvd(B, k, oversample=20, power=4, seed=0):
-    """Randomized SVD of a sparse matrix; returns U, s, Vt sorted by s desc."""
+    """Randomized SVD of a sparse matrix. Returns U, s, Vt sorted by s, descending."""
     rng = np.random.default_rng(seed)
     Q = rng.standard_normal((B.shape[1], k + oversample))
     for _ in range(power):
@@ -102,6 +105,6 @@ def norm_incidence(u, i, shape=(NU, NI), binary=True):
     du = np.asarray(C.sum(1)).ravel()
     di = np.asarray(C.sum(0)).ravel()
     with np.errstate(divide="ignore"):
-        Du = sp.diags(np.where(du > 0, du ** -.5, 0))
-        Di = sp.diags(np.where(di > 0, di ** -.5, 0))
+        Du = sp.diags(np.where(du > 0, du**-0.5, 0))
+        Di = sp.diags(np.where(di > 0, di**-0.5, 0))
     return (Du @ C @ Di).tocsr(), du, di

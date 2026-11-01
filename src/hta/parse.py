@@ -3,6 +3,7 @@
 Events keep export order (file order), so `first event per user` ties follow export order.
 Row order inside an event is preserved in `cand`/`y` columns 0..9.
 """
+
 import time
 from pathlib import Path
 
@@ -11,18 +12,31 @@ import polars as pl
 
 ROOT = Path(__file__).resolve().parents[2]
 CACHE = ROOT / "cache"
-COLS = ["rowid", "event_id", "user_id", "item_id", "timestamp", "time_bucket", "day_type",
-        "history_item_ids", "history_timestamps"]
+COLS = [
+    "rowid",
+    "event_id",
+    "user_id",
+    "item_id",
+    "timestamp",
+    "time_bucket",
+    "day_type",
+    "history_item_ids",
+    "history_timestamps",
+]
 
 
 def read(path, label):
     cols = COLS + (["clicked"] if label else [])
-    df = pl.read_csv(path, columns=cols, schema_overrides={"timestamp": pl.Int64, "time_bucket": pl.Int8,
-                                                           "day_type": pl.Int8}, low_memory=False)
+    df = pl.read_csv(
+        path,
+        columns=cols,
+        schema_overrides={"timestamp": pl.Int64, "time_bucket": pl.Int8, "day_type": pl.Int8},
+        low_memory=False,
+    )
     n = df.height
     assert n % 10 == 0
     ev = df["event_id"].to_numpy()[::10]
-    # every event is ten contiguous rows sharing user/time/history
+    # each event is ten contiguous rows with the same user, time and history
     for c in ["event_id", "user_id", "timestamp", "history_item_ids", "history_timestamps"]:
         a = df[c].to_numpy()
         assert (a.reshape(-1, 10) == a[::10, None]).all(), c
@@ -35,8 +49,12 @@ def main():
     tr, va = read(ROOT / "data/train.csv", True), read(ROOT / "data/evaluation.csv", False)
     print("read", tr.shape, va.shape, round(time.time() - t0), flush=True)
     n_tr, n_va = tr.height // 10, va.height // 10
-    hist = pl.concat([tr[::10].select(["history_item_ids", "history_timestamps"]),
-                      va[::10].select(["history_item_ids", "history_timestamps"])])
+    hist = pl.concat(
+        [
+            tr[::10].select(["history_item_ids", "history_timestamps"]),
+            va[::10].select(["history_item_ids", "history_timestamps"]),
+        ]
+    )
     hi = hist["history_item_ids"].str.extract_all(r"itm_[0-9a-f]+")
     ht = hist["history_timestamps"].str.extract_all(r"\d+")
     hlen = hi.list.len().to_numpy().astype(np.int8)
@@ -74,10 +92,25 @@ def main():
     assert (np.diff(hist_ts[:n_tr], axis=1)[hist_item[:n_tr, 1:] >= 0] >= 0).all()
 
     CACHE.mkdir(exist_ok=True)
-    np.savez(CACHE / "events.npz", n_train=n_tr, user=user.astype(np.int32), ts=ts.astype(np.int32),
-             bucket=bucket, day_type=day_type, cand=cand, y=y, hist_item=hist_item, hist_ts=hist_ts, hist_len=hlen)
-    np.savez(CACHE / "keys.npz", users=users.astype("U"), items=items.astype("U"),
-             eval_rowid=va["rowid"].to_numpy().astype("U"))
+    np.savez(
+        CACHE / "events.npz",
+        n_train=n_tr,
+        user=user.astype(np.int32),
+        ts=ts.astype(np.int32),
+        bucket=bucket,
+        day_type=day_type,
+        cand=cand,
+        y=y,
+        hist_item=hist_item,
+        hist_ts=hist_ts,
+        hist_len=hlen,
+    )
+    np.savez(
+        CACHE / "keys.npz",
+        users=users.astype("U"),
+        items=items.astype("U"),
+        eval_rowid=va["rowid"].to_numpy().astype("U"),
+    )
     print("done", n, len(users), len(items), round(time.time() - t0), flush=True)
 
 

@@ -1,4 +1,5 @@
 """Full-week refit and submission export. Usage: python -m hta.final NAME [seed,seed,...]."""
+
 import csv
 import math
 import sys
@@ -46,8 +47,10 @@ def validate(name):
         replay[order[k]] = v
     gap = np.abs(replay - saved).max()
     assert gap < 1e-9, gap
-    print(f"VALID {path.name}: {len(vals)} rows, min {min(vals):.6f} max {max(vals):.6f} mean {np.mean(vals):.5f} "
-          f"distinct {len(set(vals))}, replay gap {gap:.2e}")
+    print(
+        f"VALID {path.name}: {len(vals)} rows, min {min(vals):.6f} max {max(vals):.6f} mean {np.mean(vals):.5f} "
+        f"distinct {len(set(vals))}, replay gap {gap:.2e}"
+    )
 
 
 def main():
@@ -55,7 +58,7 @@ def main():
     seeds = [int(x) for x in sys.argv[2].split(",")] if len(sys.argv) > 2 else [113, 211]
     d = D()
     ev = np.arange(d.n_train, d.n)
-    tot = 0.
+    tot = 0.0
     for seed in seeds:
         p, _, _ = model.run_seed(d, 27, ev, seed)
         np.save(RUNS / f"{name}_eval_s{seed}.npy", p.astype(np.float32))

@@ -1,4 +1,5 @@
 """Cached state producers and per-event inputs. A state is fully keyed by its cutoff, seed and config."""
+
 import json
 import sys
 import time
@@ -8,7 +9,7 @@ import numpy as np
 from . import states
 from .lib import CACHE, D, DAY, NI, NU, day_ts
 
-DEFAULT = dict(k=64, l2=.02, wd=.3, epochs=80)
+DEFAULT = dict(k=64, l2=0.02, wd=0.3, epochs=80)
 
 
 def key(T, seed, cfg):
@@ -17,7 +18,7 @@ def key(T, seed, cfg):
 
 
 def state(d, T, seed=113, **cfg):
-    """(U, V, b, prop) fit on positives known strictly before T; cached on disk.
+    """(U, V, b, prop) fit on positives known strictly before T, cached on disk.
 
     nlu/nlv/ns request an exact constant-prior Newton refit warm-started from the Adam fit of the same config.
     """
@@ -28,6 +29,7 @@ def state(d, T, seed=113, **cfg):
     t = time.time()
     if "nlu" in cfg:
         from . import newton
+
         nw = {k: cfg[k] for k in ("nlu", "nlv", "ns")}
         U0, V0, b0, prop = state(d, T, seed, **{k: v for k, v in cfg.items() if k not in nw})
         pu, pi, _, w = states.positives(d, T)
@@ -36,8 +38,9 @@ def state(d, T, seed=113, **cfg):
         np.savez(p, U=U, V=V, b=b, prop=prop)
         print(f"  newton {p.stem} {time.time() - t:.0f}s", flush=True)
         return U, V, b, prop
-    if cfg.get("slate"):  # each click trains one likelihood; see choice.py
+    if cfg.get("slate"):  # each click trains a single likelihood (see choice.py)
         from . import choice
+
         c = {**DEFAULT, **cfg}
         U, V, b, prop = choice.fit(d, T, seed=seed, **{k: v for k, v in c.items() if k not in ("slate", "fism")})
         p.parent.mkdir(exist_ok=True)
@@ -46,8 +49,9 @@ def state(d, T, seed=113, **cfg):
         return U, V, b, prop
     pu, pi, _, w = states.positives(d, T)
     c = {**DEFAULT, **cfg}
-    if c.pop("graph", 0):  # smoothed over the positive graph; see graph.py
+    if c.pop("graph", 0):  # smoothed over the positive graph (see graph.py)
         from . import graph
+
         U, V, b, prop = graph.fit(pu, pi, w, seed=seed, **c)
         p.parent.mkdir(exist_ok=True)
         np.savez(p, U=U, V=V, b=b, prop=prop)
@@ -55,23 +59,27 @@ def state(d, T, seed=113, **cfg):
         return U, V, b, prop
     if c.pop("fism", 0):
         from . import fism
+
         c = {k: c[k] for k in c if k in ("k", "l2", "wd", "epochs", "alpha", "scale", "L", "power")}
         U, V, b, prop = fism.fit(pu, pi, w, seed=seed, **c)
         p.parent.mkdir(exist_ok=True)
         np.savez(p, U=U, V=V, b=b, prop=prop)
         print(f"  fit {p.stem} {time.time() - t:.0f}s", flush=True)
         return U, V, b, prop
-    if c.pop("expo_view", 0):  # label-free view: offers play the role of positives
+    if c.pop("expo_view", 0):  # label-free view where offers stand in for positives
         pu, pi = states.exposures(d, T)
         w = np.ones(len(pu), np.float32)
-    if c.pop("offer_prop", 0):  # noise follows how often each item is offered, an item-level exposure correction
+    if c.pop("offer_prop", 0):  # noise follows how often each item gets offered, an item-level exposure correction
         c["noise_mass"] = np.bincount(states.exposures(d, T)[1], minlength=NI).astype(np.float64)
-    if c.pop("bag", 0):  # Bayesian bootstrap: exponential weights average data noise, not just optimiser noise
-        w = w * np.random.default_rng(seed * 1009 + T % 100003).exponential(1., len(w)).astype(np.float32)
-    if c.pop("cat_noise", 0):  # noise from the exposure model: a category from the user's mix, an item within it by offers
+    if c.pop("bag", 0):  # Bayesian bootstrap: exponential weights average over data noise, not only optimiser noise
+        w = w * np.random.default_rng(seed * 1009 + T % 100003).exponential(1.0, len(w)).astype(np.float32)
+    if c.pop(
+        "cat_noise", 0
+    ):  # noise from the exposure model: pick a category from the user's mix, then an item in it by offers
         from . import groups
+
         day = (T - day_ts(20)) // DAY + 20
-        c["cat"] = groups.noise_tables(d, day, power=c.pop("cat_power", .75), tilt=c.pop("cat_tilt", 1.))
+        c["cat"] = groups.noise_tables(d, day, power=c.pop("cat_power", 0.75), tilt=c.pop("cat_tilt", 1.0))
         if c.get("cat_iota"):
             c["iota"] = c.pop("cat_iota")
             eu, ei = states.exposures(d, day_ts(day))
@@ -86,7 +94,7 @@ def state(d, T, seed=113, **cfg):
     if c.get("beta"):
         c["init_expo"] = states.exposures(d, T)
     if c.get("gamma"):
-        ev = np.where(d.ts[:d.n_train] < T)[0]
+        ev = np.where(d.ts[: d.n_train] < T)[0]
         c["choice"] = (d.user[ev], d.cand[ev], d.y[ev])
     c.pop("own_noise", None)
     U, V, b, prop = states.fit_nce(pu, pi, w, seed=seed, device="mps", **c)
@@ -100,8 +108,10 @@ def repeat_x(d, ev):
     c, h, ht, t = d.cand[ev], d.hist_item[ev], d.hist_ts[ev], d.ts[ev]
     eq = c[:, :, None] == h[:, None, :]
     cnt = eq.sum(2)
-    age = np.where(eq, (t[:, None, None] - ht[:, None, :]) / 86400., 1e9).min(2)
-    return np.stack([cnt > 0, np.log1p(cnt), np.where(cnt > 0, np.log1p(np.minimum(age, 60)), 0)], -1).astype(np.float32)
+    age = np.where(eq, (t[:, None, None] - ht[:, None, :]) / 86400.0, 1e9).min(2)
+    return np.stack([cnt > 0, np.log1p(cnt), np.where(cnt > 0, np.log1p(np.minimum(age, 60)), 0)], -1).astype(
+        np.float32
+    )
 
 
 def density_x(u, V, b, c):
@@ -117,16 +127,16 @@ def standardize(tr, *others, axis=0):
     return [np.clip((a - m) / s, -8, 8) for a in (tr, *others)]
 
 
-CFG = dict(l2=.02, wd=.3, epochs=80)
+CFG = dict(l2=0.02, wd=0.3, epochs=80)
 
 
 LOCAL_KEYS = ("il", "il_lr", "il_rounds", "il_users")
 
 
 def item_local(d, day, U, V, b, prop, cfg):
-    """Entity-mean refit of item vectors against their clickers; optional alternation with users' full positives."""
+    """Entity-mean refit of item vectors against their clickers, optionally alternating with users' full positives."""
     pu, pi, _, w = states.positives(d, day_ts(day))
-    l2, steps, lr = cfg.get("l2", DEFAULT["l2"]), cfg["il"], cfg.get("il_lr", .5)
+    l2, steps, lr = cfg.get("l2", DEFAULT["l2"]), cfg["il"], cfg.get("il_lr", 0.5)
     n_u = np.bincount(pu, weights=w, minlength=NU)
     rng = np.random.default_rng(104842)
     refs_u = rng.choice(NU, 256, p=n_u / n_u.sum())
@@ -141,8 +151,8 @@ def item_local(d, day, U, V, b, prop, cfg):
 
 
 def rejected_refs(d, day, ev, prop, R=64, seed=104842):
-    """R noise references per event from its user's offers rejected before the day; users with none use the proposal."""
-    e = np.where(d.ts[:d.n_train] < day_ts(day))[0]
+    """R noise references per event from its user's offers rejected before the day. Users with none use the proposal."""
+    e = np.where(d.ts[: d.n_train] < day_ts(day))[0]
     r, c = np.where(d.y[e] == 0)
     off, lst = states.exposure_index(d.user[e[r]], d.cand[e[r], c])
     u, rng = d.user[ev], np.random.default_rng(seed)
@@ -160,22 +170,42 @@ class Producer:
         self.d, self.seed, self.cfg, self.st, self.first = d, seed, cfg, {}, first
         self.q = {}
         ref = qref = None
-        fit_cfg = {k: v for k, v in cfg.items() if k not in ("local_steps", "unit_u", "unit_v", "slate_refs", "cat_refs",
-                                                             "slate_as_hist", "own_w", "fism_local", "rej_w", "proj", "proj_late")}
+        fit_cfg = {
+            k: v
+            for k, v in cfg.items()
+            if k
+            not in (
+                "local_steps",
+                "unit_u",
+                "unit_v",
+                "slate_refs",
+                "cat_refs",
+                "slate_as_hist",
+                "own_w",
+                "fism_local",
+                "rej_w",
+                "proj",
+                "proj_late",
+            )
+        }
         for day in range(first, last + 1):
             U, V, b, prop = state(d, day_ts(day), seed, **{k: v for k, v in fit_cfg.items() if k not in LOCAL_KEYS})
             if cfg.get("il"):
                 U, V = item_local(d, day, U, V, b, prop, cfg)
-            if cfg.get("proj"):  # keep the preference block: the exposure model carries what the other dimensions held
-                P = np.linalg.svd(V, full_matrices=False)[2][:cfg["proj"]].T
+            if cfg.get(
+                "proj"
+            ):  # only keep the preference block, the exposure model covers what the other dimensions held
+                P = np.linalg.svd(V, full_matrices=False)[2][: cfg["proj"]].T
                 U, V = (U @ P).astype(np.float32), (V @ P).astype(np.float32)
             if ref is None:
                 ref = V
             else:
                 R = states.procrustes(V, ref)
                 U, V = U @ R, V @ R
-            if cfg.get("proj_late"):  # as proj, but after query inference in the full space; bases stay aligned across days
-                Q = np.linalg.svd(V, full_matrices=False)[2][:cfg["proj_late"]].T
+            if cfg.get(
+                "proj_late"
+            ):  # like proj, but after query inference in the full space so bases stay aligned across days
+                Q = np.linalg.svd(V, full_matrices=False)[2][: cfg["proj_late"]].T
                 qref = V @ Q if qref is None else qref
                 self.q[day] = Q @ states.procrustes(V @ Q, qref)
             self.st[day] = (U, V, b, prop)
@@ -185,24 +215,28 @@ class Producer:
         U, V, b, prop = self.st[day]
         if self.cfg.get("fism"):
             from . import fism
+
             c = self.cfg
-            u = fism.pooled_user(U, self.d.hist_item[ev], c.get("alpha", 1.), c.get("scale", 3.))
-            if c.get("fism_local"):  # optional refinement from the pooled start
-                u = states.local_infer(u, V, b, prop, self.d.hist_item[ev], steps=c["fism_local"],
-                                       l2={**DEFAULT, **c}["l2"])
+            u = fism.pooled_user(U, self.d.hist_item[ev], c.get("alpha", 1.0), c.get("scale", 3.0))
+            if c.get("fism_local"):  # optional refinement from the pooled starting point
+                u = states.local_infer(
+                    u, V, b, prop, self.d.hist_item[ev], steps=c["fism_local"], l2={**DEFAULT, **c}["l2"]
+                )
             return u, V, density_x(u, V, b, self.d.cand[ev])
         steps = self.cfg.get("local_steps", 15)
         own = self.d.cand[ev] if self.cfg.get("slate_refs") else None
-        own_w = self.cfg.get("own_w", 1 - self.cfg.get("mix", 0.))
+        own_w = self.cfg.get("own_w", 1 - self.cfg.get("mix", 0.0))
         if self.cfg.get("rej_w"):
             own, own_w = rejected_refs(self.d, day, ev, prop), self.cfg["rej_w"]
         if self.cfg.get("cat_refs"):
             from . import groups
+
             kw = {k[4:]: self.cfg[k] for k in ("cat_power", "cat_tilt") if k in self.cfg}
             own, own_w = groups.refs(self.d, day, ev, **kw), self.cfg["cat_refs"]
         hist = self.d.cand[ev] if self.cfg.get("slate_as_hist") else self.d.hist_item[ev]
-        u = states.local_infer(U[self.d.user[ev]], V, b, prop, hist, steps=steps,
-                               l2={**DEFAULT, **self.cfg}["l2"], own=own, own_w=own_w)
+        u = states.local_infer(
+            U[self.d.user[ev]], V, b, prop, hist, steps=steps, l2={**DEFAULT, **self.cfg}["l2"], own=own, own_w=own_w
+        )
         if self.cfg.get("unit_u"):
             u = u / np.maximum(np.linalg.norm(u, axis=1, keepdims=True), 1e-6) * self.cfg["unit_u"]
         if self.cfg.get("unit_v"):
@@ -214,7 +248,7 @@ class Producer:
 
 def days_of(d, day):
     """Labelled event indices on the given January day."""
-    t = d.ts[:d.n_train]
+    t = d.ts[: d.n_train]
     return np.where((t >= day_ts(day)) & (t < day_ts(day + 1)))[0]
 
 

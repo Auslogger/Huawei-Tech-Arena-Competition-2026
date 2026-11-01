@@ -1,4 +1,5 @@
 """Frozen multi-view portfolio. Usage: python -m hta.portfolio NAME cut[,cut...] [seed,seed] (cut 27 writes the CSV)."""
+
 import json
 import sys
 from importlib import import_module
@@ -11,30 +12,42 @@ from .lib import D, RUNS, auc, check_query, day_ts, first_events
 A = dict(pipe.CFG)
 MEMBERS = {
     "A": A,
-    "P": {**A, "power": 1., "beta": 3.},
-    "B": {**A, "iota": .5, "own_noise": 1, "mix": .5, "slate_refs": 1},
-    "E": {**A, "cat_noise": 1, "cat_power": 1.},  # noise from the exposure model; see groups.py
+    "P": {**A, "power": 1.0, "beta": 3.0},
+    "B": {**A, "iota": 0.5, "own_noise": 1, "mix": 0.5, "slate_refs": 1},
+    "E": {**A, "cat_noise": 1, "cat_power": 1.0},  # noise from the exposure model (see groups.py)
 }
-# Tables whose noise removes exposure hold nothing useful beyond the preference block. In whitened coordinates the head's ridge
-# is about sixteen times harder, so it is rescaled.
-MEMBERS["B8"] = {**MEMBERS["B"], "proj": 8, "lam": .00625}
-MEMBERS["E8"] = {**MEMBERS["E"], "proj": 8, "lam": .00625}
-MEMBERS["K16"] = {**MEMBERS["E"], "k": 16, "lam": .1 * (16 / 64) ** 2}  # the same model fitted directly at rank 16
-MEMBERS["G"] = {**A, "batch": 32768, "epochs": 160, "graph": 1, "layers": 2, "wd": .6}  # smoothed over the positive graph
-MEMBERS["E8s"] = {**MEMBERS["E8"], "swa": 20}  # mean of the last 20 epochs
-# C4_refined. Under the event objective the tree starts from the head's utilities, so a lighter ridge pays. prx gives tables that
-# keep exposure dimensions the density of their preference block.
+# Tables whose noise removes exposure hold nothing useful beyond the preference block. The head's ridge is about
+# sixteen times harder in whitened coordinates, so it gets rescaled.
+MEMBERS["B8"] = {**MEMBERS["B"], "proj": 8, "lam": 0.00625}
+MEMBERS["E8"] = {**MEMBERS["E"], "proj": 8, "lam": 0.00625}
+MEMBERS["K16"] = {**MEMBERS["E"], "k": 16, "lam": 0.1 * (16 / 64) ** 2}  # same model, fitted directly at rank 16
+MEMBERS["G"] = {
+    **A,
+    "batch": 32768,
+    "epochs": 160,
+    "graph": 1,
+    "layers": 2,
+    "wd": 0.6,
+}  # smoothed over the positive graph
+MEMBERS["E8s"] = {**MEMBERS["E8"], "swa": 20}  # average of the last 20 epochs
+# C4_refined. Under the event objective the tree starts from the head's utilities, so a lighter ridge pays off. prx
+# gives tables that keep exposure dimensions the density of their preference block.
 MEMBERS["P2"] = {**MEMBERS["P"], "prx": 8}
 MEMBERS["G2"] = {**MEMBERS["G"], "prx": 8}
-MEMBERS["B2"] = {**MEMBERS["B8"], "lam": .0005}
-MEMBERS["E2"] = {**MEMBERS["E8"], "lam": .0005}
+MEMBERS["B2"] = {**MEMBERS["B8"], "lam": 0.0005}
+MEMBERS["E2"] = {**MEMBERS["E8"], "lam": 0.0005}
 MEMBERS["K2"] = dict(MEMBERS["K16"])
 PORTFOLIOS = {  # name: (weights, model.run_seed options)
-    "C2": ({"P": .4, "A": .35, "B": .25}, {}),
+    "C2": ({"P": 0.4, "A": 0.35, "B": 0.25}, {}),
     "C3": ({"P": 1 / 3, "A": 1 / 3, "B": 1 / 3}, dict(day_std=2, oof=1, support=1)),
-    "C4": ({"P": 1 / 6, "A": 1 / 6, "B8": 1 / 3, "E8": 1 / 3}, dict(day_std=2, oof=1, support=1, cats=3)),  # three noise families
-    "C4_refined": ({"P2": 1 / 6, "G2": 1 / 6, "B2": 1 / 3, "E2": 1 / 4, "K2": 1 / 12},
-                   dict(day_std=2, oof=1, support=1, cats=3, head_u=1, trees=600, te=1)),
+    "C4": (
+        {"P": 1 / 6, "A": 1 / 6, "B8": 1 / 3, "E8": 1 / 3},
+        dict(day_std=2, oof=1, support=1, cats=3),
+    ),  # three noise families
+    "C4_refined": (
+        {"P2": 1 / 6, "G2": 1 / 6, "B2": 1 / 3, "E2": 1 / 4, "K2": 1 / 12},
+        dict(day_std=2, oof=1, support=1, cats=3, head_u=1, trees=600, te=1),
+    ),
 }
 
 
@@ -99,10 +112,14 @@ def main():
             final.validate(name)
             model.ledger(name, kind="final", seeds=seeds, weights=weights)
             continue
-        delay = (d.ts[ev] - day_ts(cut)) / 3600.
+        delay = (d.ts[ev] - day_ts(cut)) / 3600.0
         day1 = delay < 24
-        r = {"cut": cut, "seeds": seeds, "day1": round(auc(d.y[ev][day1], blend[day1]), 6),
-             "all_delay": round(auc(d.y[ev], blend), 6)}
+        r = {
+            "cut": cut,
+            "seeds": seeds,
+            "day1": round(auc(d.y[ev][day1], blend[day1]), 6),
+            "all_delay": round(auc(d.y[ev], blend), 6),
+        }
         r["members_day1"] = {m: round(auc(d.y[ev][day1], per[m][day1]), 5) for m in per}
         print(name, r, flush=True)
         model.ledger(name, **r)

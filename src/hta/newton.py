@@ -4,6 +4,7 @@ Per-occurrence L2 and Adam both give rare users/items nearly full-size vectors. 
     sum_pos w softplus(-s) + nu * expected noise softplus(s) + lam/2 ||x||^2
 so its prior stays fixed while its data grows, and sparse vectors shrink as a posterior mode should.
 """
+
 import time
 
 import numpy as np
@@ -15,13 +16,13 @@ DEV = torch.device("mps")
 
 
 @torch.no_grad()
-def side_step(X, F, o, row, col, w, refs, nu, ridge, step=1., chunk=200_000, max_norm=1.):
+def side_step(X, F, o, row, col, w, refs, nu, ridge, step=1.0, chunk=200_000, max_norm=1.0):
     """One damped Newton step for all rows of X (n,p), with partner features F (m,p) and offsets o (m,)."""
     n, p = X.shape
     g = torch.zeros(n, p, device=DEV)
     H = torch.zeros(n, p, p, device=DEV)
     for i in range(0, len(row), chunk):
-        r, c, ww = row[i:i + chunk], col[i:i + chunk], w[i:i + chunk]
+        r, c, ww = row[i : i + chunk], col[i : i + chunk], w[i : i + chunk]
         f = F[c]
         s = (X[r] * f).sum(1) + o[c]
         q = torch.sigmoid(-s)
@@ -32,21 +33,21 @@ def side_step(X, F, o, row, col, w, refs, nu, ridge, step=1., chunk=200_000, max
     FF = (Fr[:, :, None] * Fr[:, None, :]).reshape(len(refs), -1)
     scale = (nu / len(refs))[:, None]
     for i in range(0, n, 8192):
-        Xc = X[i:i + 8192]
+        Xc = X[i : i + 8192]
         sn = Xc @ Fr.T + orf
         pn = torch.sigmoid(sn)
-        g[i:i + 8192] += scale[i:i + 8192] * (pn @ Fr)
-        H[i:i + 8192] += (scale[i:i + 8192] * ((pn * (1 - pn)) @ FF)).reshape(-1, p, p)
+        g[i : i + 8192] += scale[i : i + 8192] * (pn @ Fr)
+        H[i : i + 8192] += (scale[i : i + 8192] * ((pn * (1 - pn)) @ FF)).reshape(-1, p, p)
     g += ridge * X
     H += torch.diag(ridge)
     d = torch.linalg.solve(H.cpu().double(), g.cpu().double()).float().to(DEV)
     norm = d.norm(dim=1, keepdim=True).clamp(min=1e-9)
-    d = d * (max_norm / norm).clamp(max=1.)
+    d = d * (max_norm / norm).clamp(max=1.0)
     X -= step * d
     return float(d.norm(dim=1).mean())
 
 
-def refit(U, V, b, prop, pu, pi, w, lam_u=.05, lam_v=.05, lam_b=.01, sweeps=4, nu=1., m=1024, seed=0, log=False):
+def refit(U, V, b, prop, pu, pi, w, lam_u=0.05, lam_v=0.05, lam_b=0.01, sweeps=4, nu=1.0, m=1024, seed=0, log=False):
     """Warm-started alternating Newton. Returns numpy (U, V, b)."""
     t0 = time.time()
     rng = np.random.default_rng(seed)
