@@ -13,10 +13,12 @@ ROC AUC over all candidate rows together, not per user or per slate.
 | C3 | Equal weights and small stack corrections | 0.825805 |
 | C4 | A model of what each user gets shown | 0.829778 |
 | C4_refined | Graph and rank 16 members, user propensity in the head, tree trained on the whole slate | 0.830118 |
-| C8 | Half slate posterior chains, half trees that take the chains as input | see below |
+| C5S_c | C4_refined blended with one slate posterior chain | 0.834219 |
+| C8 | Half slate posterior chains, half trees that take the chains as input | **0.834673** |
 
-C8 is our final candidate. Against C4_refined, on the same local checks, it gains between +0.0042 and +0.0053 at each of
-four cuts (more on the checks below). For reference, an earlier attempt at this task topped out at 0.817357.
+C8 is our best result, and C5S_c is the simpler fallback. Both were frozen before they were scored. Against C4_refined,
+on the same local checks, C8 gains between +0.0042 and +0.0053 at each of four cuts and C5S_c between +0.0039 and
++0.0050 (more on the checks below). For reference, an earlier attempt at this task topped out at 0.817357.
 
 ## The data
 
@@ -60,6 +62,10 @@ samples. On its own it already beats C4_refined at every local cut.
 C8 runs the chains through the trees as extra inputs, then averages those trees with six chains (chain s6 under two seeds,
 chain s7 under four) at equal weight. That weight was fixed in advance.
 
+C5S_c is the simpler of the two. It leaves the C4_refined trees exactly as they were and blends them with chain s6 under
+two seeds, giving the chain three quarters of the weight. It has no new trees in it, which made it a safe fallback in
+case the chain-fed trees didn't carry over to the hidden set.
+
 ## How we checked things
 
 - **Honest splits.** Every local check fits on data strictly before a cutoff day, then scores each user's first event
@@ -85,6 +91,7 @@ uv sync
 uv run python -m hta.parse                          # once, about 30 s, writes cache/
 uv run python -m hta.portfolio C4_refined 27        # writes and checks submissions/C4_refined.csv
 uv run python -m hta.c8                             # rebuilds C8 end to end
+uv run python -m hta.c8.c5s_c                       # rebuilds the C5S_c fallback
 ```
 
 A few things to know:
@@ -94,6 +101,8 @@ A few things to know:
 - **Rebuilding C8** takes roughly five to six hours on an M1 Max, and every step can be stopped and resumed. The chains
   don't repeat bit for bit, even with the same seed, so a rebuilt file comes out close to ours but not identical. See
   `src/hta/c8/__main__.py` for the faster split version.
+- **Rebuilding C5S_c** takes about two hours. It needs only the two s6 chains at cut 27, and reuses them if a C8 rebuild
+  already made them.
 - **Threads** are set with `HTA_THREADS`. On the M1 Max, four CPU jobs at two threads each and at most two GPU fits at once
   worked best.
 - **Local checks** at earlier cuts take a cut list, such as `uv run python -m hta.portfolio C4 23,24`, and
@@ -110,5 +119,5 @@ A few things to know:
 | `slate` | The slate posterior sampler on Metal |
 | `portfolio`, `final` | Named blends of members, CSV export and the file checks |
 | `compare`, `transfer`, `blend` | Local cuts and matched comparisons between runs |
-| `c8` | Settings and commands to rebuild the final submission |
+| `c8` | Settings and commands to rebuild C8 and the C5S_c fallback |
 | everything else | Ideas we tried and set aside, kept so the results can be rerun |
