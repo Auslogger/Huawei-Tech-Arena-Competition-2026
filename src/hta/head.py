@@ -118,6 +118,11 @@ def _chunk(g, i, j):
 
 
 def fit_groups(groups, lam=0.1, iters=300, chunk=40000, verbose=False, init=None, blocks=None, lam_b=None):
+    """Same objective as `fit`, over several item tables, with one autograd graph per chunk to bound memory.
+
+    lam_b: a separate ridge for the scalar coefficients, which are few and well determined, against the many bilinear weights.
+    """
+    lam_b = lam if lam_b is None else lam_b
     a, b = groups[0].U.shape[1] - 1, groups[0].V.shape[1] - 1
     c = 0 if groups[0].X is None else groups[0].X.shape[-1]
     m = Bilinear(a, b, c, blocks=blocks).double() if init is None else init
@@ -146,7 +151,7 @@ def fit_groups(groups, lam=0.1, iters=300, chunk=40000, verbose=False, init=None
                 ll = (ll if g.w is None else ll * g.w[i:j].double()).sum() / total
                 ll.backward()
                 val += float(ll.detach())
-        reg = 0.5 * lam * ((m.W**2).sum() + (0 if m.beta is None else (m.beta**2).sum()))
+        reg = 0.5 * lam * (m.W**2).sum() + (0 if m.beta is None else 0.5 * lam_b * (m.beta**2).sum())
         reg.backward()
         return val + float(reg.detach())
 
