@@ -1,4 +1,10 @@
-"""Frozen multi-view portfolio. Usage: python -m hta.portfolio NAME cut[,cut...] [seed,seed] (cut 27 writes the CSV)."""
+"""Frozen multi-view portfolios. Usage: python -m hta.portfolio NAME cut[,cut...] [seed,seed] [member].
+
+Cut 27 writes the CSV. With a member, only that member is scored and cached, so members can run as parallel jobs and a
+later call without one blends them. NAME picks its spec by the part before any underscore, so C3_s4 is C3 under more seeds
+and never touches an uploaded file. A member config with a "kind" key runs through that kind's runner instead of the NCE
+stack. A deterministic kind ("seedless": 1) is fitted once and shared by every seed.
+"""
 
 import json
 import sys
@@ -37,6 +43,9 @@ MEMBERS["G2"] = {**MEMBERS["G"], "prx": 8}
 MEMBERS["B2"] = {**MEMBERS["B8"], "lam": 0.0005}
 MEMBERS["E2"] = {**MEMBERS["E8"], "lam": 0.0005}
 MEMBERS["K2"] = dict(MEMBERS["K16"])
+MEMBERS["S3"] = {"kind": "slate", "names": "s3"}  # the slate chain's predictive on its own (see slate.py)
+MEMBERS["S5"] = {"kind": "slate", "names": "s5"}
+MEMBERS["S6"] = {"kind": "slate", "names": "s6"}
 PORTFOLIOS = {  # name: (weights, model.run_seed options)
     "C2": ({"P": 0.4, "A": 0.35, "B": 0.25}, {}),
     "C3": ({"P": 1 / 3, "A": 1 / 3, "B": 1 / 3}, dict(day_std=2, oof=1, support=1)),
@@ -47,6 +56,19 @@ PORTFOLIOS = {  # name: (weights, model.run_seed options)
     "C4_refined": (
         {"P2": 1 / 6, "G2": 1 / 6, "B2": 1 / 3, "E2": 1 / 4, "K2": 1 / 12},
         dict(day_std=2, oof=1, support=1, cats=3, head_u=1, trees=600, te=1),
+    ),
+    # Chain outputs go into every head and tree. Tables matter less after that, so each family gets an equal share.
+    "C5": (
+        {"P2": 0.18, "G2": 0.18, "B2": 0.18, "E2": 0.18, "K2": 0.18, "S3": 0.1},
+        dict(day_std=2, oof=1, support=1, cats=3, head_u=1, trees=600, te=1, slate="s3", lam_b=0.0005),
+    ),
+    "C6": (
+        {"P2": 0.16, "G2": 0.16, "B2": 0.16, "E2": 0.16, "K2": 0.16, "S5": 0.2},
+        dict(day_std=2, oof=1, support=1, cats=3, head_u=1, trees=600, te=1, slate="s5", lam_b=0.0005),
+    ),
+    "C7": (
+        {"P2": 0.1, "G2": 0.1, "B2": 0.1, "E2": 0.1, "K2": 0.1, "S6": 0.5},  # half chain, half trees that start from it
+        dict(day_std=2, oof=1, support=1, cats=3, head_u=1, trees=600, te=1, slate="s6", lam_b=0.0005),
     ),
 }
 
@@ -82,6 +104,7 @@ def run_member(d, name, member, cut, seed, ev):
 
 
 def score(d, name, member, cut, seed, ev):
+    seed = 0 if MEMBERS[member].get("seedless") else seed
     p = member_path(name, member, cut, seed)
     if p.exists():
         return np.load(p)

@@ -120,6 +120,14 @@ def run_seed(
     views: list of state configs, concatenated per day. blocks=True drops cross-view head interactions.
     day_std: standardise each table by its own moments, 1 items, 2 items and users (default: day-21 items, pooled users).
     oof: the tree learns from head logits of a head fit on the other days. support: adds features.support tree inputs.
+    extra: extra(day, ev, producer) (n,10,c) goes to the tree only. extra_head: same signature, goes to head and tree.
+    pop: training rows of each day's table. 0 all that day's events, 1 each user's first event that day, 2 each user's first
+    event from that day to the cut, the hidden set's own construction.
+    cats: adds the exposure model's inputs to head and tree (groups.Cats, rich=cats). head_u: also gives the head the user
+    scalars, so a user's propensity enters the choice model and not only the tree. prx: adds the density scalars of the table's
+    top prx directions to the tree. te: the tree learns the event's outside-option likelihood from the head's utilities, not
+    row log-loss. slate: names of slate chains whose outputs go to head and tree (slate.Inputs). slate_base: the chain's
+    predictive replaces the head, so the tree starts from it.
     """
     t0 = time.time()
     if cats:
@@ -132,6 +140,15 @@ def run_seed(
         def extra_head(day, ev, P):
             S = features.scalars(d, ev, cut_day=None if day < cut else cut)[..., [5, 6, 7, 8, 9]]
             return S if inner is None else np.concatenate([inner(day, ev, P), S], -1)
+
+    if slate:
+        from .slate import Inputs
+
+        chains, inner2 = Inputs(slate, seed), extra_head
+
+        def extra_head(day, ev, P):
+            S = chains(day, ev)
+            return S if inner2 is None else np.concatenate([inner2(day, ev, P), S], -1)
 
     views = [cfg] if views is None else views
     Ps = [pipe.Producer(d, first_day, cut, seed=seed, **c) for c in views]
@@ -192,15 +209,20 @@ def run_seed(
         for ev, u, V, D, X, S in data
     ]
     blk = [p.st[cut][1].shape[1] for p in Ps] if blocks and len(Ps) > 1 else None
-    m = head.fit_groups(groups, lam=lam, iters=300, blocks=blk)
-    gq = head.Group(su(uq), sv(Vq), d.cand[test_ev], None, sx(np.concatenate([Xq, Dq], -1)))
-    lpq = head.score_group(m, gq)
-
-    heads = [
-        head.fit_groups(groups[:i] + groups[i + 1 :], lam=lam, iters=300, blocks=blk) if oof and len(groups) > 1 else m
-        for i in range(len(groups))
-    ]
-    tabs = [table(head.score_group(h, g), x[3], x[4], x[5]) for h, g, x in zip(heads, groups, data)]
+    if slate_base:
+        lpq = np.log(chains.p(cut, test_ev))
+        tabs = [table(np.log(chains.p(day, x[0])), x[3], x[4], x[5]) for day, x in zip(days, data)]
+    else:
+        m = head.fit_groups(groups, lam=lam, iters=300, blocks=blk, lam_b=lam_b)
+        gq = head.Group(su(uq), sv(Vq), d.cand[test_ev], None, sx(np.concatenate([Xq, Dq], -1)))
+        lpq = head.score_group(m, gq)
+        heads = [
+            head.fit_groups(groups[:i] + groups[i + 1 :], lam=lam, iters=300, blocks=blk, lam_b=lam_b)
+            if oof and len(groups) > 1
+            else m
+            for i in range(len(groups))
+        ]
+        tabs = [table(head.score_group(h, g), x[3], x[4], x[5]) for h, g, x in zip(heads, groups, data)]
     F, base = np.concatenate([a for a, _ in tabs]), np.concatenate([b for _, b in tabs])
     lab = np.concatenate([d.y[x[0]].ravel() for x in data])
     ta = alpha if tree_alpha is None else tree_alpha

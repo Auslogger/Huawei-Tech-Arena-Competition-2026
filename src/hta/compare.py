@@ -23,8 +23,10 @@ def load(name, cut, seeds):
     w = json.loads((RUNS / "members" / f"{run}.json").read_text())["weights"]
     if opt:
         w = {m: 1 / len(w) for m in w} if opt[0] == "eq" else {opt[0]: 1.0}
+    seeded = lambda m: [0] if portfolio.MEMBERS[m].get("seedless") else seeds
     return sum(
-        v * sum(np.load(portfolio.member_path(run, m, cut, s)) for s in seeds) / len(seeds) for m, v in w.items()
+        v * sum(np.load(portfolio.member_path(run, m, cut, s)) for s in seeded(m)) / len(seeded(m))
+        for m, v in w.items()
     )
 
 
