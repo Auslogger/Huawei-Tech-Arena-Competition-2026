@@ -9,19 +9,18 @@ log, so some figures below come from one-off screens whose scripts aren't includ
 
 ## Where we got to
 
-| Submission | What it added | Local AUC, cut 24 | Public AUC |
-|---|---|---:|---:|
-| C1 | User and item vectors, a choice head and a LightGBM residual | .809879 | 0.823199 |
-| C2 | Three of those models with different noise, blended | .812089 | 0.825478 |
-| C3 | Equal weights and three small stack corrections | .812470 | 0.825805 |
-| C4 | A model of what each user gets shown | .815729 | 0.829778 |
-| C4_refined | Graph and rank 16 members, user propensity in the head, tree trained on the whole slate | .816428 | 0.830118 |
-| C5S_c | C4_refined blended with one slate posterior chain | .820437 | 0.834219 |
-| C8 | Half slate posterior chains, half trees that take the chains as input | .820764 | **0.834673** |
+| Submission | What it added | Public AUC |
+|---|---|---:|
+| C1 | User and item vectors, a choice head and a LightGBM residual | 0.823199 |
+| C2 | Three of those models with different noise, blended | 0.825478 |
+| C3 | Equal weights and three small stack corrections | 0.825805 |
+| C4 | A model of what each user gets shown | 0.829778 |
+| C4_refined | Graph and rank 16 members, user propensity in the head, tree trained on the whole slate | 0.830118 |
+| C5S_c | C4_refined blended with one slate posterior chain | 0.834219 |
+| C8 | Half slate posterior chains, half trees that take the chains as input | **0.834673** |
 
-Local AUC is the "all delay" check described below, on the 24 January cut. C8 is our best result and C5S_c is the
-simpler fallback. Both were frozen before they were scored. For reference, an earlier attempt at this task topped out at
-0.817357.
+C8 is our best result and C5S_c is the simpler fallback. Both were frozen before they were scored. For reference, an
+earlier attempt at this task topped out at 0.817357.
 
 The two final files at all four local cuts:
 
@@ -197,7 +196,8 @@ and aren't counted against the ideas.
 ## Running it
 
 You need Python 3.13 and [uv](https://docs.astral.sh/uv/). Put the competition files at `data/train.csv` and
-`data/evaluation.csv`, which aren't in this repo, then:
+`data/evaluation.csv`. They aren't in this repo because of their size: `train.csv` is 7.26 GB and
+`evaluation.csv` 459 MB, far over GitHub's 100 MB file limit. Then:
 
 ```sh
 uv sync
@@ -222,7 +222,9 @@ uv run python -m hta.c8.c5s_c 23,24,25,26                           # C5S_c and 
 
 A few things to know:
 
-- **The chains need an Apple Silicon Mac**, because they run on Metal. Everything else runs on the CPU.
+- **Hardware.** Everything was built and tested on an Apple Silicon Mac (M1 Max, 64 GB), where the GPU fits run on Metal.
+  On other machines, change the `"mps"` device in `pipe.py`, `graph.py` and `slate.py` to `"cuda"` or `"cpu"`. That
+  hasn't been tested, and the chains are much slower on the CPU.
 - **LightGBM** may fail to import with `Library not loaded: @rpath/libomp.dylib`. Linking `lightgbm/lib/libomp.dylib`
   to the copy inside `torch/lib` in the virtual environment fixes it.
 - **Rebuilding C8** takes roughly five to six hours on an M1 Max, and every step can be stopped and resumed. See
