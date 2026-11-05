@@ -1,5 +1,12 @@
 # Huawei Tech Arena 2026, Phase 1
 
+**We won Phase 1.** Our team, Latent Space, finished first of 76 teams when the leaderboard closed on 4 November 2026,
+with C8_s78 at 0.834695.
+
+<p align="center">
+  <img src="docs/leaderboard_phase1.png" alt="Phase 1 leaderboard at the close, top 15, with Latent Space first at 0.834695" width="440">
+</p>
+
 Our solution for the Huawei Ireland Tech Arena 2026 click prediction task. Each event shows a user ten candidate items at
 one moment, and the user clicks one of them or none. We predict a click probability for every candidate, and the score is
 ROC AUC over all candidate rows together, not per user or per slate.
@@ -17,23 +24,25 @@ log, so some figures below come from one-off screens whose scripts aren't includ
 | C4 | A model of what each user gets shown | 0.829778 |
 | C4_refined | Graph and rank 16 members, user propensity in the head, tree trained on the whole slate | 0.830118 |
 | C5S_c | C4_refined blended with one slate posterior chain | 0.834219 |
-| C8 | Half slate posterior chains, half trees that take the chains as input | **0.834673** |
+| C8 | Half slate posterior chains, half trees that take the chains as input | 0.834673 |
+| C8_s78 | C8 with its s6 chains swapped for a slightly more exact chain | **0.834695** |
 
-C8 is our best result and C5S_c is the simpler fallback. Both were frozen before they were scored. For reference, an
-earlier attempt at this task topped out at 0.817357.
+C8_s78 is our best result and the file that won. It differs from C8 only in its chains, and C5S_c is the simpler
+fallback. All three were frozen before they were scored. For reference, an earlier attempt at this task topped out at
+0.817357.
 
-The two final files at all four local cuts:
+The final files at all four local cuts:
 
-| Cut | C4_refined | C5S_c | C8 |
-|---:|---:|---:|---:|
-| 23 Jan | .808906 | .813904 (+.0050) | .814239 (+.0053) |
-| 24 Jan | .816428 | .820437 (+.0040) | .820764 (+.0043) |
-| 25 Jan | .828568 | .832432 (+.0039) | .832783 (+.0042) |
-| 26 Jan | .836849 | .840902 (+.0041) | .841301 (+.0045) |
+| Cut | C4_refined | C5S_c | C8 | C8_s78 |
+|---:|---:|---:|---:|---:|
+| 23 Jan | .808906 | .813904 (+.0050) | .814239 (+.0053) | .814279 (+.0054) |
+| 24 Jan | .816428 | .820437 (+.0040) | .820764 (+.0043) | .820820 (+.0044) |
+| 25 Jan | .828568 | .832432 (+.0039) | .832783 (+.0042) | .832824 (+.0043) |
+| 26 Jan | .836849 | .840902 (+.0041) | .841301 (+.0045) | .841336 (+.0045) |
 
-The local checks predicted the public board well. Over C4_refined, C5S_c gained +.0042 on average locally and +.0041
-in public, and C8 gained +.0046 both locally and in public. Earlier, C1 to C3 each scored in public almost exactly .0134
-above their cut 24 local AUC.
+The local checks predicted the public board well. Over C4_refined, C5S_c gained +.0042 on average locally and +.0041 in
+public, and C8 gained +.0046 both locally and in public. C8_s78 added +.00004 over C8 locally and +.00002 in public.
+Earlier, C1 to C3 each scored in public almost exactly .0134 above their cut 24 local AUC.
 
 ## The data
 
@@ -142,6 +151,15 @@ training rows are scored by the chain fitted before that day, with each sample r
 that day. C8 averages those trees with six chains (s6 under two seeds, s7 under four) at equal weight. That weight was
 fixed in advance, and it was also the best of .3 to .7 at every cut.
 
+**C8_s78: one last swap of chains.** Chain s8 is s7 with the exact warm-up integral: its warm-up term averages over the
+rival masses of the labelled slates instead of using a single one. Alone it was no better than s7, but in C8's chain half
+it does a little more than s6 did. C8_s78 takes s7 under four seeds and s8 under two, with the trees and the .5 weight
+unchanged and nothing refitted, and the recipe was fixed before the file was built. It beat C8 at every cut, by +.000035
+to +.000056 with the bootstrap's 5% bound above zero each time. The file is nearly the same as C8 (Spearman .99997),
+which made it a safe final upload: in a bootstrap over events with random public and private row splits, its full-set
+score fell below C8's in 4 of 3,200 draws, by .000014 at worst. In public it gained +.000022, enough for first place by
+.000012.
+
 **Close to the ceiling.** More chains stopped helping, the chain-fed trees add little to the chains, and the old stack
 adds nothing on top. Blends of estimators of the same quantity gain about half their shared error, so the small blend
 gains left suggest we're near the data's limit.
@@ -188,7 +206,7 @@ public board.
 | CatBoost, a network stacker, one tree over all members | Correlated .995 with LightGBM, or weaker than separate trees |
 | A correction fitted after the stack | Double counts clicks the tables already hold |
 | More seeds (307 and 401) for the stack | About +.0001 |
-| Chain variants: 9 to 12 dimensions, temperature, event slope, exact warm-up integrals | Flat or worse |
+| Chain variants: 9 to 12 dimensions, temperature, event slope | Flat or worse. The exact warm-up integral was flat alone too, but earned a small place in C8_s78 |
 
 A few early negatives turned out to be bugs, such as a head that stopped optimising early. Those were rerun after fixing
 and aren't counted against the ideas.
@@ -203,7 +221,8 @@ You need Python 3.13 and [uv](https://docs.astral.sh/uv/). Put the competition f
 uv sync
 uv run python -m hta.parse                          # once, about 30 s, writes cache/
 uv run python -m hta.portfolio C4_refined 27        # writes and checks submissions/C4_refined.csv
-uv run python -m hta.c8                             # rebuilds C8 end to end
+uv run python -m hta.c8                             # rebuilds C8_s78, our best file, end to end
+uv run python -m hta.c8.blend C8                    # then C8 from the same runs
 uv run python -m hta.c8.c5s_c                       # rebuilds the C5S_c fallback
 ```
 
@@ -213,8 +232,10 @@ To repeat the local checks at cuts 23 to 26:
 uv run python -m hta.portfolio C4_refined 23,24,25,26               # the baseline, prints each cut's AUC
 uv run python -m hta.c8.chains s6 21,22,23,24,25,26 113,211         # chain s6 at every day the trees train on
 uv run python -m hta.c8.chains s7 23,24,25,26 113,211,307,401
+uv run python -m hta.c8.chains s8 23,24,25,26 113,211
 uv run python -m hta.portfolio C7 23,24,25,26                       # the chain-fed trees
-uv run python -m hta.c8.blend 23,24,25,26                           # C8 at each cut
+uv run python -m hta.c8.blend C8_s78 23,24,25,26                    # C8_s78 at each cut
+uv run python -m hta.c8.blend C8 23,24,25,26                        # C8 at each cut
 uv run python -m hta.c8.c5s_c 23,24,25,26                           # C5S_c and C4_refined at each cut
 ```
 
@@ -227,9 +248,9 @@ A few things to know:
   hasn't been tested, and the chains are much slower on the CPU.
 - **LightGBM** may fail to import with `Library not loaded: @rpath/libomp.dylib`. Linking `lightgbm/lib/libomp.dylib`
   to the copy inside `torch/lib` in the virtual environment fixes it.
-- **Rebuilding C8** takes roughly five to six hours on an M1 Max, and every step can be stopped and resumed. See
-  `src/hta/c8/__main__.py` for the faster split version. **C5S_c** takes about two hours, and reuses the two s6 chains at
-  cut 27 if a C8 rebuild already made them.
+- **Rebuilding C8_s78** takes roughly six hours on an M1 Max, and every step can be stopped and resumed. C8 then needs
+  only the blend. See `src/hta/c8/__main__.py` for the faster split version. **C5S_c** takes about two hours, and reuses
+  the two s6 chains at cut 27 if a C8_s78 rebuild already made them.
 - **Runs don't repeat bit for bit.** The chains and the multi-threaded CPU fits change slightly between runs, even with
   the same seed. A rebuilt file comes out about as different from ours as another seed would: close, but not identical.
 - **Threads** are set with `HTA_THREADS`. On the M1 Max, four CPU jobs at two threads each and at most two GPU fits at once
@@ -246,7 +267,7 @@ A few things to know:
 | `slate` | The slate posterior sampler on Metal |
 | `portfolio`, `final` | Named blends of members, CSV export and the file checks |
 | `compare`, `transfer`, `blend` | Local cuts and matched comparisons between runs |
-| `c8` | Settings and commands to rebuild C8 and the C5S_c fallback |
+| `c8` | Settings and commands to rebuild C8_s78, C8 and the C5S_c fallback |
 | `synth`, `gibbs`, `bp`, `bayes` | A synthetic twin with known truth, and the samplers that found the click-only limit |
 | everything else | Ideas we tried and set aside, kept so the results can be rerun |
 
