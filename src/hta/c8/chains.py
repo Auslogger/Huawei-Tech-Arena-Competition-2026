@@ -1,4 +1,4 @@
-"""The slate chains behind C8, at the settings they were run with.
+"""The slate chains behind C8 and C8_s78, at the settings they were run with.
 
 Usage: python -m hta.c8.chains NAME cut[,cut...] seed[,seed...].
 Each run writes runs/slate/NAME_c{cut}_s{seed}.npz, the file slate.Inputs reads, and is skipped when that file exists.
@@ -13,7 +13,7 @@ import numpy as np
 from .. import slate
 from ..lib import D, RUNS, auc, day_ts, first_events
 
-# Chain priors and link, the same for both chains
+# Chain priors and link, shared by every chain unless its settings say otherwise
 CHAIN = dict(
     kappa=5.92, c0=-3.4, tau=0.7, kd=4.0, kp=4.0, link=1, item_sd=0.2, em=1, coin=1.0, rfix=0.0, ws=1.0, pois=0
 )
@@ -26,9 +26,11 @@ SETTINGS = {
     "s6": dict(FIT, wck=0, bt0=(0.64, 0.06, 0.43, -0.04, 0.04, 0.98)),
     # same as s6, but each warm-up click's interest term comes from that user's earlier clicks
     "s7": dict(FIT, wck=1, bt0=(0.6, 0.02, 0.39, -0.06, 0.02, 1.1)),
+    # same as s7, but the warm-up term averages over the rival masses of the labelled slates instead of using one
+    "s8": dict(FIT, wck=1, bt0=(0.6, 0.02, 0.39, -0.06, 0.02, 1.1), link=2),
 }
-# What C8 needs: s6 at every training day of the C7 trees and at the cut, s7 at the cut under four seeds
-NEEDED = [("s6", c, s) for s in (113, 211) for c in range(21, 28)] + [("s7", 27, s) for s in (113, 211, 307, 401)]
+# The C7 trees read chain s6 at every day they train on and at the cut
+TREES = [("s6", c, s) for s in (113, 211) for c in range(21, 28)]
 
 
 def path(name, cut, seed):
@@ -40,8 +42,8 @@ def run(d, name, cut, seed):
     if p.exists():
         print(f"{p.name} already exists", flush=True)
         return
-    o = dict(SETTINGS[name])
-    kw = dict(CHAIN, bt0=np.array(o.pop("bt0"), np.float32))
+    o = dict(CHAIN, **SETTINGS[name])
+    o["bt0"] = np.array(o["bt0"], np.float32)
     q = np.arange(d.n_train, d.n) if cut == 27 else first_events(d, day_ts(cut), day_ts(27))
     t0 = time.time()
 
@@ -52,7 +54,7 @@ def run(d, name, cut, seed):
             msg += f", AUC {auc(d.y[q], np.log(r['p'][np.searchsorted(r['rows'], q)])):.6f}"
         print(msg, flush=True)
 
-    r, ch = slate.fit(d, cut, seed, tick=(500, tick), **o, **kw)
+    r, ch = slate.fit(d, cut, seed, tick=(500, tick), **o)
     p.parent.mkdir(parents=True, exist_ok=True)
     np.savez(
         p,

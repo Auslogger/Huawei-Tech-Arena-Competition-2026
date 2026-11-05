@@ -1,11 +1,12 @@
-"""C5S_c, the fallback to C8: C4_refined blended with chain s6. Usage: python -m hta.c8.c5s_c [cut[,cut...]].
+"""C5S_c, the fallback to C8 and C8_s78: C4_refined blended with chain s6. Usage: python -m hta.c8.c5s_c [cut[,cut...]].
 
 C4_refined is the stack of five tables with no chain input at all. Chain s6 under two seeds is averaged by probability
 and blended in logit space with a share of .75, fixed before the file was scored.
 
 With no argument this rebuilds submissions/C5S_c.csv from the raw data, skipping work whose output already exists: the
-two s6 chains at cut 27, which C8 uses too, then the C4_refined members at cut 27, then the blend. That takes roughly
-two hours on an M1 Max. With a cut list it only blends runs that already exist, and an earlier cut prints local AUCs.
+two s6 chains at cut 27, which C8 and C8_s78 use too, then the C4_refined members at cut 27, then the blend. That takes
+roughly two hours on an M1 Max. With a cut list it only blends runs that already exist, and an earlier cut prints local
+AUCs.
 """
 
 import sys
